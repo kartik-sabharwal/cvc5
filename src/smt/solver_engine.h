@@ -871,6 +871,9 @@ class CVC5_EXPORT SolverEngine
    * Get the enviornment from this solver engine.
    */
   Env& getEnv();
+
+  void hello_world(); /* new function */
+
   /* .......................................................................  */
  private:
   /* .......................................................................  */

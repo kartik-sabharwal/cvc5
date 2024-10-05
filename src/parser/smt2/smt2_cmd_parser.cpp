@@ -83,6 +83,7 @@ Smt2CmdParser::Smt2CmdParser(Smt2Lexer& lex,
     d_table["get-qe"] = Token::GET_QE_TOK;
     d_table["include"] = Token::INCLUDE_TOK;
     d_table["simplify"] = Token::SIMPLIFY_TOK;
+    d_table["hello-world"] = Token::HELLO_WORLD_TOK;
   }
   if (d_lex.isSygus())
   {
@@ -927,6 +928,12 @@ std::unique_ptr<Cmd> Smt2CmdParser::parseNextCommand()
       Trace("parser-sygus") << "Define synth fun : " << name << std::endl;
       d_state.popScope();
       cmd.reset(new SynthFunCommand(name, sygusVars, range, g));
+    }
+    break;
+    case Token::HELLO_WORLD_TOK: 
+    {
+      Trace("parser") << "read (hello-world)" << std::endl;
+      cmd.reset(new HelloWorldCommand());
     }
     break;
     case Token::EOF_TOK:

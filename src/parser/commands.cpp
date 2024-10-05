@@ -2647,4 +2647,18 @@ void DatatypeDeclarationCommand::toStream(std::ostream& out) const
       out, sortVectorToTypeNodes(d_datatypes));
 }
 
+/* begin new */
+void HelloWorldCommand::invoke(cvc5::Solver* solver, SymManager* sm) {
+  solver->hello_world(); 
+}
+
+std::string HelloWorldCommand::getCommandName() const {
+  return "hello-world";
+}
+
+void HelloWorldCommand::toStream(std::ostream& out) const {
+  internal::Printer::getPrinter(out)->toStreamCmdHelloWorld(out);
+}
+/* end new */
+
 }  // namespace cvc5::parser

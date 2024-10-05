@@ -418,6 +418,10 @@ void AstPrinter::toStreamWithLetify(std::ostream& out,
   lbind->popScope();
 }
 
+void AstPrinter::toStreamCmdHelloWorld(std::ostream& out) const {
+  out << "HelloWorld()" << std::endl;
+}
+
 }  // namespace ast
 }  // namespace printer
 }  // namespace cvc5::internal

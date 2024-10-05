@@ -2222,4 +2222,11 @@ ResourceManager* SolverEngine::getResourceManager() const
   return d_env->getResourceManager();
 }
 
+void SolverEngine::hello_world() {
+  finishInit();
+  Assert(d_state->isFullyInited());
+
+  std::cout << "Hello, World!" << std::endl;
+}
+
 }  // namespace cvc5::internal

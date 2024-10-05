@@ -315,6 +315,8 @@ class Smt2Printer : public cvc5::internal::Printer
    */
   static std::string sygusGrammarString(const TypeNode& t);
 
+  void toStreamCmdHelloWorld(std::ostream& out) const override;
+
  private:
   /**
    * Base print method.

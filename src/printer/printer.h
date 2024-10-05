@@ -348,6 +348,8 @@ class CVC5_EXPORT Printer
                                       TypeNode locType,
                                       TypeNode dataType) const;
 
+  virtual void toStreamCmdHelloWorld(std::ostream& out) const;
+
  protected:
   /** Derived classes can construct, but no one else. */
   Printer() {}

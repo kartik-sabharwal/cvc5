@@ -2413,6 +2413,10 @@ void Smt2Printer::toStreamCmdGetQuantifierElimination(std::ostream& out,
    --------------------------------------------------------------------------
 */
 
+void Smt2Printer::toStreamCmdHelloWorld(std::ostream& out) const {
+  out << "(hello-world)";
+}
+
 }  // namespace smt2
 }  // namespace printer
 }  // namespace cvc5::internal

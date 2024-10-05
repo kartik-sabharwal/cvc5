@@ -608,4 +608,8 @@ void Printer::toStreamCmdDeclareHeap(std::ostream& out,
   printUnknownCommand(out, "declare-heap");
 }
 
+void Printer::toStreamCmdHelloWorld(std::ostream& out) const {
+  printUnknownCommand(out, "quit");
+}
+
 }  // namespace cvc5::internal

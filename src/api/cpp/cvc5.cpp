@@ -8948,6 +8948,8 @@ std::string Solver::getVersion() const
 
 TermManager& Solver::getTermManager() const { return d_tm; }
 
+void Solver::hello_world() const { d_slv->hello_world(); }
+
 }  // namespace cvc5
 
 namespace std {

@@ -1227,6 +1227,17 @@ class CVC5_EXPORT QuitCommand : public Cmd
   void toStream(std::ostream& out) const override;
 }; /* class QuitCommand */
 
+/* begin new */
+class CVC5_EXPORT HelloWorldCommand : public Cmd
+{
+ public:
+  HelloWorldCommand() {}
+  void invoke(cvc5::Solver* solver, parser::SymManager* sm) override;
+  std::string getCommandName() const override;
+  void toStream(std::ostream& out) const override;
+}; /* class HelloWorldCommand */
+/* end new */
+
 }  // namespace parser
 }  // namespace cvc5
 

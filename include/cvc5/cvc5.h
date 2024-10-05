@@ -6999,6 +6999,8 @@ class CVC5_EXPORT Solver
    */
   TermManager& getTermManager() const;
 
+  void hello_world() const;
+
  private:
   /**
    * Constructs a solver with the given original options. This should only be
