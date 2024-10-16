@@ -1830,3 +1830,13 @@ name   = "Quantifiers"
 [[option.mode.INTERLEAVE]]
   name = "interleave"
   help = "add instantiation and evaluation unfolding lemmas in the same step."
+
+### My quantifiers module options
+
+[[option]]
+  name     = "myQuantifiersModule"
+  category = "expert"
+  long     = "my-quantifiers-module"
+  type     = "bool"
+  default  = "false"
+  help     = "a dummy quantifiers module that prints Hello, World! to standard output on each run"

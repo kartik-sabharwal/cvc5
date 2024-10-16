@@ -127,6 +127,12 @@ void QuantifiersModules::initialize(Env& env,
     d_mbqi.reset(new InstStrategyMbqi(env, qs, qim, qr, tr));
     modules.push_back(d_mbqi.get());
   }
+  if (options.quantifiers.myQuantifiersModule) 
+  {
+    d_my_quantifiers_module.reset(
+      new MyQuantifiersModule(env, qs, qim, qr, tr));
+    modules.push_back(d_my_quantifiers_module.get());
+  }
   if (options.quantifiers.oracles)
   {
     d_oracleEngine.reset(new OracleEngine(env, qs, qim, qr, tr));
