@@ -15,17 +15,17 @@ class MyQuantifiersModule : public QuantifiersModule
  public:
   MyQuantifiersModule(Env& env, QuantifiersState& qs,
     QuantifiersInferenceManager& qim, QuantifiersRegistry& qr,
-    TermRegistry& tr) {};
+    TermRegistry& tr);
 
-  ~MyQuantifiersModule() {};
+  ~MyQuantifiersModule();
 
-  bool needsCheck(Theory::Effort e) override {};
+  bool needsCheck(Theory::Effort e) override;
 
-  void reset_round(Theory::Effort e) override {};
+  void reset_round(Theory::Effort e) override;
 
-  void check(Theory::Effort e, QEffort quant_e) override {};
+  void check(Theory::Effort e, QEffort quant_e) override;
 
-  std::string identify() const override {};
+  std::string identify() const override;
 };
 
 } // namespace quantifiers

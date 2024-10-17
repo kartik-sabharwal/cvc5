@@ -1,6 +1,8 @@
 #include "theory/quantifiers/my_quantifiers_module.h"
 
 namespace cvc5::internal {
+namespace theory {
+namespace quantifiers {
 
 MyQuantifiersModule::MyQuantifiersModule(Env& env, QuantifiersState& qs,
   QuantifiersInferenceManager& qim, QuantifiersRegistry& qr,
@@ -32,4 +34,6 @@ std::string MyQuantifiersModule::identify() const
   return "my-quantifiers-module";
 }
 
+} // namespace quantifiers
+} // namespace theory
 } // namespace cvc5::internal
