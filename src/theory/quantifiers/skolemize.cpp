@@ -89,6 +89,29 @@ TrustNode Skolemize::process(Node q)
   }
   else
   {
+    /** @Kartik.  Rearrange variables here, because doing so later within
+     * getSkolemizedBodyInduction() leads to a segfault for some reason. */
+    if ( d_rearranged.find(q) == d_rearranged.end() )
+    {
+      NodeManager* nm = NodeManager::currentNM();
+
+      Node bvs_node = q[0];
+
+      if ( bvs_node.getNumChildren() > 1 )
+      {
+        std::vector<Node> bvs;
+        bvs.insert(bvs.end(), bvs_node.begin(), bvs_node.end());
+
+        Node tmp = bvs[0];
+        bvs[0] = bvs[1];
+        bvs[1] = tmp;
+
+        q = nm->mkNode(Kind::FORALL,
+                       nm->mkNode(Kind::BOUND_VAR_LIST, bvs),
+                       q[1]);
+      }
+    }
+
     // otherwise, we use the more general skolemization with inductive
     // strengthening, which does not support proofs
     Node body = getSkolemizedBodyInduction(q);
@@ -187,7 +210,8 @@ Node Skolemize::mkSkolemizedBodyInduction(const Options& opts,
                                           std::vector<TNode>& fvs,
                                           std::vector<Node>& sk,
                                           Node& sub,
-                                          std::vector<unsigned>& sub_vars)
+                                          std::vector<unsigned>& sub_vars,
+                                          std::set<TNode>& rearranged)
 {
   Assert (f.getKind()==Kind::FORALL);
   NodeManager* nm = NodeManager::currentNM();
@@ -318,6 +342,10 @@ Node Skolemize::mkSkolemizedBodyInduction(const Options& opts,
       sub_vars.insert(
           sub_vars.end(), ind_var_indicies.begin() + 1, ind_var_indicies.end());
       n_str_ind = nm->mkNode(Kind::FORALL, bvl, n_str_ind.negate()).negate();
+
+      /** @Kartik.  We do not want to rearrange the variables in nret, the
+       * sub-quantified formula that will be skolemized next. */
+      rearranged.insert(nret);
     }
     ret = nm->mkNode(Kind::OR, nret, n_str_ind);
   }
@@ -346,7 +374,8 @@ Node Skolemize::getSkolemizedBodyInduction(Node f)
     Node sub;
     std::vector<unsigned> sub_vars;
     Node ret = mkSkolemizedBodyInduction(
-        options(), f, f[1], fvs, d_skolem_constants[f], sub, sub_vars);
+      options(), f, f[1], fvs, d_skolem_constants[f], sub, sub_vars, 
+      d_rearranged);
     d_skolem_body[f] = ret;
     // store sub quantifier information
     if (!sub.isNull())

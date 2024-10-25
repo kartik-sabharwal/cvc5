@@ -101,6 +101,10 @@ class Skolemize : protected EnvObj
    * variables if a quantified formula to skolemize
    * has multiple induction variables. See page 5
    * of Reynolds et al., VMCAI 2015.
+   *
+   * @Kartik.  This is a static method and will therefore not have acess to the
+   * member variable d_rearranged.  I have added an extra argument to the end
+   * of this list so that a caller might pass it d_rearranged.
    */
   static Node mkSkolemizedBodyInduction(const Options& opts,
                                         Node q,
@@ -108,7 +112,8 @@ class Skolemize : protected EnvObj
                                         std::vector<TNode>& fvs,
                                         std::vector<Node>& sk,
                                         Node& sub,
-                                        std::vector<unsigned>& sub_vars);
+                                        std::vector<unsigned>& sub_vars,
+                                        std::set<TNode>& rearranged);
   /** get skolem constants for quantified formula q */
   bool getSkolemConstantsInduction(Node q, std::vector<Node>& skolems);
   /** get the skolemized body for quantified formula q
@@ -158,6 +163,12 @@ class Skolemize : protected EnvObj
   std::unordered_map<Node, Node> d_skolem_body;
   /** Eager proof generator for skolemization lemmas */
   std::unique_ptr<EagerProofGenerator> d_epg;
+  /** @Kartik. We want to rearrange induction variables once per top-level
+   * universally quantified formula with negative polarity.  We only rearrange
+   * the bound variable list for formulas that are not members of d_rearranged,
+   * and once we're done with the rearrangement we insert it as well as its
+   * quantified sub-formula into d_rearranged. */
+  std::set<TNode> d_rearranged;
 };
 
 }  // namespace quantifiers

@@ -180,8 +180,11 @@ Node QuantifiersPreprocess::preSkolemizeQuantifiers(
       Node sub;
       std::vector<unsigned> sub_vars;
       // return skolemized body
+      /** @Kartik.  Using a dummy set here should be good enough so long as
+       * pre-skolemization remains disabled.  It is off by default. */
+      std::set<TNode> dummy;
       ret = Skolemize::mkSkolemizedBodyInduction(
-          options(), n, nn, fvs, sk, sub, sub_vars);
+        options(), n, nn, fvs, sk, sub, sub_vars, dummy);
     }
     visited[key] = ret;
     return ret;
