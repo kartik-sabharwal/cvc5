@@ -15,5 +15,5 @@ generated/
 /deps/
 .vscode
 *.pyc
-
-
+my-cvc5-Doxyfile
+/my-cvc5-documentation/
