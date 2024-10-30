@@ -1,4 +1,4 @@
-on: [push, pull_request]
+on: [pull_request]
 name: CI
 
 # Prevents github from relying on clones of homebrew-core or homebrew-cask.
