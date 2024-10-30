@@ -28,6 +28,7 @@
 #include "theory/quantifiers/term_util.h"
 #include "theory/rewriter.h"
 #include "theory/sort_inference.h"
+#include "util/random.h"
 #include "util/rational.h"
 
 using namespace cvc5::internal::kind;
@@ -102,9 +103,21 @@ TrustNode Skolemize::process(Node q)
         std::vector<Node> bvs;
         bvs.insert(bvs.end(), bvs_node.begin(), bvs_node.end());
 
-        Node tmp = bvs[0];
-        bvs[0] = bvs[1];
-        bvs[1] = tmp;
+        Trace("rand-sk-ind") << "before:";
+        for ( auto bv : bvs )
+        {
+          Trace("rand-sk-ind") << " " << bv;
+        }
+        Trace("rand-sk-ind") << std::endl;
+
+        std::shuffle(bvs.begin(), bvs.end(), Random::getRandom());
+
+        Trace("rand-sk-ind") << "after:";
+        for ( auto bv : bvs )
+        {
+          Trace("rand-sk-ind") << " " << bv;
+        }
+        Trace("rand-sk-ind") << std::endl;        
 
         q = nm->mkNode(Kind::FORALL,
                        nm->mkNode(Kind::BOUND_VAR_LIST, bvs),
