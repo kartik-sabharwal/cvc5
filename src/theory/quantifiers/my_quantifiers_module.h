@@ -63,6 +63,8 @@ class MyQuantifiersModule : public QuantifiersModule
   
   void showAssertedForalls();
 
+  void showCurrentAssumptions();
+
   void collectRelevantInequations();
 
   void showRelevantInequations();

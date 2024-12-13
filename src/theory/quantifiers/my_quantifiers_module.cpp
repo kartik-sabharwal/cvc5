@@ -58,6 +58,8 @@ void MyQuantifiersModule::check(Theory::Effort e, QEffort quant_e)
   buildOperatorArgumentIndices();
   mapEquivalenceClassesToGroundTerms();
   partitionEquivalenceClasses();
+  std::cout << std::endl << "** current assumptions **" << std::endl;
+  showCurrentAssumptions();
   collectRelevantInequations();
   std::cout << std::endl << "** after relevance filtering **" << std::endl;
   showRelevantInequations();
@@ -540,6 +542,18 @@ void MyQuantifiersModule::showAssertedForalls()
     std::cout << "Asserted quantifier #" << i << " is " <<
       model->getAssertedQuantifier(i) << std::endl;
   }    
+}
+
+void MyQuantifiersModule::showCurrentAssumptions() {
+  eq::EqualityEngine* ee = getEqualityEngine();
+
+  for ( eq::EqClassIterator assumption_cursor = 
+          eq::EqClassIterator(NodeManager::currentNM()->mkConst(true), ee);
+        !assumption_cursor.isFinished();
+        assumption_cursor++ ) {
+    Node assumption = *assumption_cursor;
+    std::cout << "- " << assumption << std::endl;
+  }
 }
 
 void MyQuantifiersModule::collectRelevantInequations() 
