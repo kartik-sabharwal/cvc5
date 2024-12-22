@@ -10,6 +10,35 @@
 
 #include <stack>
 
+/* What are we trying to do here?
+ *
+ * 1. collect all sorts in the current signature,
+ * 2. declare an enumeration predicate for each of these sorts,
+ * 3. collect all the equivalence classes in the current signature,
+ * 4. find out which equivalence classes contain **concrete** terms,
+ * 5. iterate over all equalities in the equivalence class of false and gather
+ * the ones where either the LHS or RHS cannot be equated to a concrete term,
+ * (what if we want to consider only equalities where **neither** LHS nor RHS
+ * can be equated to a constant term?)
+ * 6. remove equalities that can be refuted by counterexamples,
+ * 7. pair up terms in equivalence classes of LHS and terms in equivalence
+ * classes of RHS to create lemma candidates,
+ * 8. eliminate destructors in lemma candidates,
+ * 9. if a term appears in both the LHS and RHS of a lemma candidate, replace
+ * it with a new variable and generalize it away,
+ * 10. add the appropriate universal quantifiers to get 'real' lemmas,
+ * 11. prompt the user for a particular lemma,
+ * 12. submit the lemma to the solver.
+ */
+
+/* IDEAS:
+ *
+ * 1. Eliminate lemmas candidates that are propositional consequences using
+ * your own partial evaluator or using a subsolver. Essentially you want to
+ * eliminate possibilities that are entailed deductively (as opposed to
+ * entailed inductively)
+ */
+
 namespace cvc5::internal {
 namespace theory {
 namespace quantifiers {
@@ -59,7 +88,7 @@ void MyQuantifiersModule::check(Theory::Effort e, QEffort quant_e)
   mapEquivalenceClassesToGroundTerms();
   partitionEquivalenceClasses();
   std::cout << std::endl << "** current assumptions **" << std::endl;
-  showCurrentAssumptions();
+  // showCurrentAssumptions();
   collectRelevantInequations();
   std::cout << std::endl << "** after relevance filtering **" << std::endl;
   showRelevantInequations();
@@ -69,14 +98,17 @@ void MyQuantifiersModule::check(Theory::Effort e, QEffort quant_e)
   collectLemmaCandidates();
   std::cout << std::endl << "** lemma candidates **" << std::endl;
   showLemmaCandidates();
-  eliminateDestructorsInLemmaCandidates();
-  generalizeLemmaCandidates();
-  std::cout << std::endl << "** after destructor elimination **" << std::endl;
-  showLemmaCandidates();
-  bindVarsInLemmas();
-  std::cout << std::endl << "** after generalization **" << std::endl;
-  showLemmaCandidates();
-  promptForLemma();
+  showConcreteLemmaCandidates();
+  // exit(0);
+  // printGroundTermsEquivalentToSubterms();
+  // eliminateDestructorsInLemmaCandidates();
+  // generalizeLemmaCandidates();
+  // std::cout << std::endl << "** after destructor elimination **" << std::endl;
+  // showLemmaCandidates();
+  // bindVarsInLemmas();
+  // std::cout << std::endl << "** after generalization **" << std::endl;
+  // showLemmaCandidates();
+  // promptForLemma();
   return;
 }
 
@@ -1697,6 +1729,326 @@ void MyQuantifiersModule::promptForLemma()
 
   //     break;
   //   }
+  // }
+}
+
+void MyQuantifiersModule::printGroundTermsEquivalentToSubterms() 
+{
+  // In this function, we want to see if there is information in the environment
+  // that turns seemingly unprovable lemma candidates provable.
+  // I should probably explain this better.
+  // Consider the usual definitions of '+' and '*' on the usual natural number
+  // datatype.
+  // It's definitely a bad choice to try to prove a lemma candidate based on
+  // the following goal:
+  //     sk0 * sk1 = sk0 * sk2 + sk0 * sk1
+  // But what if we know sk2 was equivalent to the concrete term 0?
+  // We'd then try to prove a lemma candidate based on the following goal:
+  //     sk0 * sk1 = sk0 * 0 + sk0 * sk1
+  // That would certainly make more sense!
+  // 
+  // However I need to see how much each lemma candidate can be simplified
+  // using contextual information.
+  // I intend to do this by printing out both the representative and the ground
+  // term corresponding to each subterm of a lemma candidate before destructor
+  // elimination, and definitely before quantifiers are introduced.
+  //
+  // The plan is to take a '<GOAL NUMBER>.<LEMMA NUMBER>' or 'X' (for stop)
+  // command from the user.
+  // In the former case if we're given G.L we'll print the representative and
+  // the concrete term for each subterm of the lemma candidate L for goal G.
+  // If there is no goal G or no lemma L, we should complain and ask again.
+  // Once it's printed we'll make another request from the user.
+  // In the latter case we just don't ask the user for any further input.
+  // If the input is illegal, we should just ask again.
+
+  bool halt = false;
+  bool parsed = false;
+  std::string command = "";
+  std::string post_period = "";
+  size_t period_index = 0;
+  size_t goal_number = 0;
+  size_t lemma_number = 0;
+
+  while ( !halt ) 
+  {
+    std::cout << "> ";
+    std::getline(std::cin, command);
+
+    if ( command.compare("X") == 0 ) 
+    {
+      halt = true;
+    }
+    else
+    {
+      try
+      {
+        goal_number = std::stoi(command, &period_index);
+        post_period = command.substr(period_index + 1);
+        lemma_number = std::stoi(post_period, &period_index);
+        parsed = (period_index == post_period.size());
+      }
+      catch ( const std::invalid_argument& e )
+      {
+        parsed = false;
+      }
+      catch ( const std::out_of_range& e )
+      {
+        parsed = false;
+      } 
+
+      if ( parsed )
+      {
+        if ( goal_number < d_lemma_cands.size() && 
+             lemma_number < d_lemma_cands[goal_number].size() )
+        {
+          // 'selected lemma'
+          Node sel_lem = d_lemma_cands[goal_number][lemma_number];
+
+          std::cout << "{";
+
+          bool first = true;
+
+          // 'selected lemma buffer'
+          NodeDfsIterable sel_lem_buf(sel_lem);
+          // 'point max'
+          NodeDfsIterator pt_max = sel_lem_buf.end();
+          // 'point'
+          for ( NodeDfsIterator pt = sel_lem_buf.begin();
+                pt != pt_max; pt++ )
+          { 
+            if ( first ) 
+            {
+              first = false;
+            }
+            else
+            {
+              std::cout << ", ";
+            }
+
+            std::cout << "(";
+
+            // 'term at point'
+            Node term = *pt;
+            std::cout << term << ",";
+            // 'representative of term'
+            Node repr = d_qstate.getRepresentative(term);
+            std::cout << repr << ",";
+            // '(reference for) concrete term equivalent to repr'
+            std::map<Node,Node>::iterator concrete = d_ground_eqc_map.find(repr);
+            if ( concrete != d_ground_eqc_map.end() )
+            {
+              std::cout << *concrete;
+            }
+            else
+            {   
+              std::cout << "-";
+            }
+            
+            std::cout << ")";
+          }
+
+          std::cout << "}" << std::endl;
+        }
+        else
+        {
+          std::cout << "<<no G.L>>" << std::endl;
+        }
+      }
+      else 
+      {
+        std::cout << "<<no parse>>" << std::endl;
+      }
+    }
+  }
+}
+
+Node MyQuantifiersModule::concretizeTerm(Node in_term)
+{
+  // in_term is 'input term'
+
+  enum Command { examine, construct };
+  struct Job { Command cmd; Node term; Kind kind; size_t arity; };
+
+  std::vector<Job> jobs;
+  std::vector<Node> results;  
+
+  jobs.push_back({ examine, in_term, Kind::NULL_EXPR, 0 });
+
+  while ( !jobs.empty() )
+  {
+    // display the job stack ======
+    // {
+    //   std::cout << "**job stack** ";
+    //   bool first = true;
+    //   for ( auto j : jobs )
+    //   {
+    //     if ( first ) { first = false; } else { std::cout << "; "; }
+    // 
+    //     switch ( j.cmd ) 
+    //     { 
+    //       case examine: 
+    //       { 
+    //         std::cout << "examine(" << j.term << ")"; 
+    //         break; 
+    //       } 
+    // 
+    //       case construct: 
+    //       { 
+    //         std::cout << "construct(" << j.kind << "," << j.arity << ")";
+    //         break; 
+    //       }
+    //     }
+    //   }
+    //   std::cout << std::endl;
+    // }
+    // ============================
+
+    // display the result stack ==========
+    // {
+    //   std::cout << "**result stack** ";
+    //   bool first = true;
+    //   for ( auto res : results )
+    //   {
+    //     if ( first ) { first = false; } else { std::cout << "; "; }
+    //     std::cout << res;
+    //   }
+    //   std::cout << std::endl;
+    // }
+    // ===================================
+
+    Job cj = jobs.back(); // cj is 'current job'
+    jobs.pop_back();
+
+    switch ( cj.cmd )
+    {
+      case examine:
+      {
+        Node cterm = cj.term; // 'current term'
+
+        Node repr = d_qstate.getRepresentative(cterm); // 'representative'
+
+        std::map<Node,Node>::iterator concr; // 'concrete'
+        concr = d_ground_eqc_map.find(repr);
+
+        if ( concr != d_ground_eqc_map.end() )
+        {
+          results.push_back(concr->second);
+        }
+
+        else if ( cterm.hasOperator() )
+        {
+          Node op = cterm.getOperator();
+          bool builtin = (op.getKind() == Kind::BUILTIN);
+
+          // std::cout << "!!" << op << ".getKind() == " << op.getKind() << "!! ";
+          // std::cout << "!!" << "builtin: " << builtin << "!!" << std::endl;
+
+          size_t extra_childs = 0; // 'extra children'
+  
+          if ( !builtin )
+          {
+            extra_childs = 1;
+            results.push_back( op );
+          }
+
+          jobs.push_back({ construct, 
+                           Node::null(), 
+                           cterm.getKind(),
+                           cterm.getNumChildren() + extra_childs });
+
+          for ( auto ri = cterm.rbegin(); ri != cterm.rend(); ri++ )
+          {
+            jobs.push_back({ examine, *ri, Kind::NULL_EXPR, 0 });
+          }
+        }
+
+        else
+        {
+          results.push_back(cterm);
+        }
+        
+        break;
+      }
+
+      case construct:
+      {
+        std::vector<Node> childs; // 'children'
+
+        Assert( results.size() >= cj.arity );        
+
+        childs.insert( childs.begin(), results.end() - cj.arity, results.end() );
+
+        // size_t ct = 0; // 'count'
+        // 
+        // std::vector<Node>::reverse_iterator ri;  // 'reverse iterator'
+        // ri = results.rbegin();
+        // 
+        // while ( ct < cj.arity )
+        // {
+        //   childs.push_back(*ri);
+        //   ri++;
+        //   ct++;
+        // }
+      
+        for ( size_t i = 0; i < cj.arity; i++ )
+        {
+          results.pop_back();
+        }
+
+        // print childs ==========
+        // { 
+        //   std::cout << "**childs** ";
+        //   bool first = true;        
+        //   for ( auto child : childs )
+        //   {
+        //     if ( first ) { first = false; } else { std::cout << ", "; }
+        //     std::cout << child;
+        //   } 
+        //   std::cout << std::endl;
+        // }
+        // =======================
+
+        results.push_back(
+          NodeManager::currentNM()->mkNode(cj.kind, childs));
+
+        break;
+      }
+    }
+  }
+
+  Node ans = results.back(); // ans is 'answer'
+  results.pop_back();
+
+  return ans;
+}
+
+void MyQuantifiersModule::showConcreteLemmaCandidates()
+{
+  size_t gidx = 0; // 'goal index'
+  size_t lidx = 0; // 'lemma index'
+
+  for ( auto cands : d_lemma_cands  )
+  {
+    lidx = 0;
+
+    for ( auto cand : cands )
+    {
+      std::cout << gidx << "." << lidx << ". " << concretizeTerm(cand) << std::endl;
+
+      lidx++;
+    }
+
+    gidx++;
+  }
+
+  // if ( d_lemma_cands.size() > 0 && d_lemma_cands[0].size() > 0 )
+  // {
+  //   std::cout << "0.0. " << concretizeTerm(d_lemma_cands[0][0]) << std::endl;
+  // }
+  // else
+  // {
+  //   std::cout << "<<no lemmas to concretize>>" << std::endl;
   // }
 }
 

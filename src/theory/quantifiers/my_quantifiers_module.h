@@ -118,6 +118,12 @@ class MyQuantifiersModule : public QuantifiersModule
 
   void promptForLemma();
 
+  void printGroundTermsEquivalentToSubterms();
+
+  Node concretizeTerm(Node in_term);
+
+  void showConcreteLemmaCandidates();
+
   // @Kartik.  All equivalence classes in the current model.
   std::vector<Node> d_eqcs;
 
