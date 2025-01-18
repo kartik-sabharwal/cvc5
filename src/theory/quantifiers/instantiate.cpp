@@ -354,6 +354,25 @@ bool Instantiate::addInstantiationInternal(
   ill->d_list.push_back(body);
   // add to temporary debug statistics (# inst on this round)
   d_instDebugTemp[q]++;
+  // @Kartik 1:17 Jan 17.
+  // I want to print the QID of the formula being instantiated and the
+  // formula's arguments, as if the QID is a function name and its arguments
+  // are the function's arguments.
+  if ( TraceIsOn("inst_specific") )
+  {
+    Trace("inst_specific") << "(" <<
+      d_qreg.getQuantAttributes().quantToString(q);
+    {
+      bool firstp = false;
+      for ( auto term : terms )
+      {
+        if ( firstp ) { firstp = false; } else { Trace("inst_specific") << " "; }
+        Trace("inst_specific") << term;
+      }
+    }
+    Trace("inst_specific") << ")" << std::endl;
+  }
+  // * * *
   if (TraceIsOn("inst"))
   {
     Trace("inst") << "*** Instantiate [" << id << "] " << q << " with "
