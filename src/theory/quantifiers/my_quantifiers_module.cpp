@@ -33,10 +33,33 @@
 
 /* IDEAS:
  *
- * 1. Eliminate lemmas candidates that are propositional consequences using
+ * 1. Eliminate lemma candidates that are propositional consequences using
  * your own partial evaluator or using a subsolver. Essentially you want to
  * eliminate possibilities that are entailed deductively (as opposed to
  * entailed inductively)
+ *
+ * 2. Suppose you have a relevant disequation of the form
+ *     f(a1, b1, c1) =/= f(a2, b2, c2)
+ * Analogously you have a 'goal' of the form
+ *     f(a1, b1, c1) = f(a2, b2, c2)
+ * You can conjecture
+ *     -- a1 = a2,
+ *     -- b1 = b2, and even
+ *     -- c1 = c2
+ * Essentially you want to leverage congruence.
+ * In fact you can enhance this a little.
+ * Suppose you want to prove:
+ *     F(a,b) = G(c,d,e)
+ * Suppose also that G(c,d,e) is in the equivalence class of F(i,j)
+ * Then you might propose the conjecture:
+ *     F(a,b) = F(i,j)
+ * You could also propose the conjectures:
+ *     -- a = i, and
+ *     -- b = j
+ * You can get rid of the conjecture 
+ *     x = y
+ * for any x and y that are in the same equivalence class, or are 
+ * syntactically identical.
  */
 
 namespace cvc5::internal {
@@ -87,28 +110,27 @@ void MyQuantifiersModule::check(Theory::Effort e, QEffort quant_e)
   buildOperatorArgumentIndices();
   mapEquivalenceClassesToGroundTerms();
   partitionEquivalenceClasses();
-  std::cout << std::endl << "** current assumptions **" << std::endl;
+  // std::cout << std::endl << "** current assumptions **" << std::endl;
   // showCurrentAssumptions();
   collectRelevantInequations();
-  std::cout << std::endl << "** after relevance filtering **" << std::endl;
-  showRelevantInequations();
+  // std::cout << std::endl << "** after relevance filtering **" << std::endl;
+  // showRelevantInequations();
   filterRelevantInequationsBySampling();
-  std::cout << std::endl << "** after counterexample filtering **" << std::endl;
-  showRelevantInequations();
+  // std::cout << std::endl << "** after counterexample filtering **" << std::endl;
+  // showRelevantInequations();
   collectLemmaCandidates();
-  std::cout << std::endl << "** lemma candidates **" << std::endl;
-  showLemmaCandidates();
-  showConcreteLemmaCandidates();
-  // exit(0);
+  // std::cout << std::endl << "** after concretization **" << std::endl;
+  concretizeLemmaCandidates();
+  // showLemmaCandidates();
   // printGroundTermsEquivalentToSubterms();
-  // eliminateDestructorsInLemmaCandidates();
+  eliminateDestructorsInLemmaCandidates();
   // generalizeLemmaCandidates();
+  replaceSkVarsWithBoundVarsInCands();
   // std::cout << std::endl << "** after destructor elimination **" << std::endl;
-  // showLemmaCandidates();
-  // bindVarsInLemmas();
-  // std::cout << std::endl << "** after generalization **" << std::endl;
-  // showLemmaCandidates();
-  // promptForLemma();
+  bindVarsInLemmas();
+  std::cout << std::endl << "** after generalization **" << std::endl;
+  showLemmaCandidates();
+  promptForLemma();
   return;
 }
 
@@ -1427,6 +1449,14 @@ void MyQuantifiersModule::populateDummyPredicates()
   return;
 }
 
+/*
+ * Generalization is buggy!
+ * (= (plus Z (mult K1 K3)) (plus (mult K1 Z)  (mult K1 K3)))
+ * (= (plus Z       x0    ) (plus (mult x2 x1)      x0     ))
+ * Why is 'Z' generalized to a variable?
+ *
+ * The blame is on generalizeTerm(), **not** getCanonicalTerm().
+ */ 
 void MyQuantifiersModule::generalizeLemmaCandidates()
 {
   std::vector<Node> goals;
@@ -1449,6 +1479,8 @@ void MyQuantifiersModule::generalizeLemmaCandidates()
     {
       Node cand = generalizeTerm(cand_);
       Node canon_cand = d_termCanon.getCanonicalTerm(cand, true);
+
+      std::cout << "!!" << cand << " is canonically " << canon_cand << "!!" << std::endl;
 
       if ( (canon_cand != d_rel_ineqns[i]) &&
            (std::find(d_lemma_cands[i].begin(), d_lemma_cands[i].end(), 
@@ -1485,12 +1517,175 @@ void MyQuantifiersModule::generalizeExample()
   //  std::endl;
 }
 
+Node MyQuantifiersModule::replaceSkVarsWithBoundVars(Node orig)
+{
+  // 'Sk' is 'Skolem', 'orig' is 'original'
+
+  // You want to DFS over the term once again.
+  // However you should be careful when you decide the in your loop.
+  // Past experience suggests:
+  // - term under consideration has no operator,
+  // - term under consideration has a BUILTIN-kinded operator, and
+  // - term under consideration has another kind of operator.
+  // As before, you should define an enumeration with two commands EXAMINE and
+  // CONSTRUCT.
+  // You should also define a struct with four fields: a command, a Node,
+  // a Kind, and an arity.
+  // You should also maintain a substitution that maps Skolem variables to
+  // bound variables.
+
+  enum Command { EXAMINE, CONSTRUCT };
+  struct Job { Command cmd; Node term; Kind kind; size_t arity; };
+
+  NodeManager* nm = NodeManager::currentNM(); // 'node manager'
+  std::vector<Job> jobs;
+  std::vector<Node> results;
+  size_t sn = 0; // 'serial number'
+  std::map<Node,Node> substn; // 'substitution'
+  Node ans; // 'answer'
+
+  jobs.push_back({ EXAMINE, orig, Kind::NULL_EXPR, 0 });
+
+  while ( !jobs.empty() )
+  {
+    Job j = jobs.back();
+    jobs.pop_back();
+
+    if ( j.cmd == EXAMINE &&
+         j.term.hasOperator() &&
+         j.term.getOperator().getKind() == Kind::BUILTIN )
+    {
+      /* Here's a demonstration. '+' stands for some builtin.
+       *
+       *          bottom of stack --> top of stack
+       * _before_
+       * jobs:    EXAMINE(+(T1,T2,T3)) 
+       * results: 
+       * _after_
+       * jobs:    CONSTRUCT(+,3),EXAMINE(T3),EXAMINE(T2),EXAMINE(T1)
+       * results: 
+       */
+
+      jobs.push_back({ CONSTRUCT, Node::null(), j.term.getKind(), j.term.getNumChildren() });
+      for ( auto ci = j.term.rbegin(); ci != j.term.rend(); ci++ ) // 'child iterator'
+      {
+        jobs.push_back({ EXAMINE, *ci, Kind::NULL_EXPR, 0 });
+      }
+    }
+    else if ( j.cmd == EXAMINE &&
+              j.term.hasOperator() )
+           // j.term.getOperator().getKind() != KIND::BUILTIN
+    {
+      /* Here's a demonstration. 'F' stands for a non-builtin operator.
+       * '@' stands for 'APPLY_UF', 'APPLY_CONSTRUCTOR', 'APPLY_SELECTOR',
+       * et cetera.
+       *
+       *          bottom of stack --> top of stack
+       * _before_
+       * jobs:    EXAMINE(@(F,T1,T2)) 
+       * results: 
+       * _after_
+       * jobs:    CONSTRUCT(@,3),EXAMINE(T2),EXAMINE(T1)
+       * results: F
+       */
+
+      results.push_back( j.term.getOperator() );
+
+      jobs.push_back({ CONSTRUCT, Node::null(), j.term.getKind(), j.term.getNumChildren() + 1 });
+
+      for ( auto ci = j.term.rbegin(); ci != j.term.rend(); ci++ ) // 'child iterator'
+      {
+        jobs.push_back({ EXAMINE, *ci, Kind::NULL_EXPR, 0 });
+      }
+    }
+    else if ( j.cmd == EXAMINE && j.term.isVar() && substn.find(j.term) != substn.end() )
+    {
+      results.push_back( substn[j.term] );
+    }
+    else if ( j.cmd == EXAMINE && j.term.isVar() )
+    {
+      Node var = nm->mkBoundVar( "x" + std::to_string(sn), j.term.getType() );
+      sn++;
+
+      results.push_back(var);
+
+      substn[j.term] = var;
+    }
+    else if ( j.cmd == EXAMINE )
+    {
+      results.push_back( j.term );
+    }
+    else // j.cmd == CONSTRUCT
+    {
+      /* Here's a demonstration. 'F' stands for a non-builtin operator.
+       * '@' stands for 'APPLY_UF', 'APPLY_CONSTRUCTOR', 'APPLY_SELECTOR',
+       * et cetera.
+       *
+       *          bottom of stack --> top of stack
+       * _before_
+       * jobs:    CONSTRUCT(@,3)
+       * results: F,T1,T2
+       * _after_
+       * jobs:    
+       * results: @(F,T1,T2)
+       */
+
+      std::vector<Node> childs; // 'children'
+      childs.insert( childs.begin(), results.end() - j.arity, results.end() );
+
+      for ( size_t i = 0; i < j.arity; i++ )
+      {
+        results.pop_back();
+      }
+
+      results.push_back( nm->mkNode(j.kind, childs) );
+    }
+  }
+
+  ans = results.back();
+  results.clear();
+
+  return ans;
+}
+
+void MyQuantifiersModule::replaceSkVarsWithBoundVarsInCands()
+{
+  for ( size_t g = 0; g < d_lemma_cands.size(); g++ ) // 'goal number'
+  {
+    d_rel_ineqns[g] = 
+      d_termCanon.getCanonicalTerm(
+        replaceSkVarsWithBoundVars(d_rel_ineqns[g]),
+        true);
+    
+    for ( size_t l = 0; l < d_lemma_cands[g].size(); l++ ) // 'lemma number'
+    {
+      d_lemma_cands[g][l] = 
+        d_termCanon.getCanonicalTerm(
+          replaceSkVarsWithBoundVars(d_lemma_cands[g][l]),
+          true);
+    }      
+  } 
+}
+
 Node MyQuantifiersModule::generalizeTerm(Node root_term)
 {
+  /* ROOT_TERM is guaranteed to be an equality.
+   * So we can write it like
+   * ROOT_TERM[0] == ROOT_TERM[1]
+   *
+   * SUBTERMS[i] holds all the subterms of ROOT_TERM[i] that are not variables.
+   *
+   * SHARED is the intersection of SUBTERMS[0] with SUBTERMS[1].
+   */
+  // subterms[0] will hold the subterms on the 
+
   std::set<Node> subterms[2];
+
   for ( size_t i = 0; i < 2; i++ )
   {
-    NodeDfsIterable iter(root_term[i], VisitOrder::PREORDER,
+    NodeDfsIterable iter(
+      root_term[i], 
+      VisitOrder::PREORDER,
       std::function<bool(TNode)>([](TNode n)
       {
         return n.isVar();
@@ -2023,33 +2218,20 @@ Node MyQuantifiersModule::concretizeTerm(Node in_term)
   return ans;
 }
 
-void MyQuantifiersModule::showConcreteLemmaCandidates()
+void MyQuantifiersModule::concretizeLemmaCandidates()
 {
-  size_t gidx = 0; // 'goal index'
-  size_t lidx = 0; // 'lemma index'
-
-  for ( auto cands : d_lemma_cands  )
+  for ( size_t i = 0; i < d_lemma_cands.size(); i++ )
   {
-    lidx = 0;
+    d_rel_ineqns[i] = NodeManager::currentNM()->mkNode(
+      Kind::EQUAL, 
+      concretizeTerm(d_rel_ineqns[i][0]), 
+      concretizeTerm(d_rel_ineqns[i][1]));
 
-    for ( auto cand : cands )
+    for ( size_t j = 0; j < d_lemma_cands[i].size(); j++ )
     {
-      std::cout << gidx << "." << lidx << ". " << concretizeTerm(cand) << std::endl;
-
-      lidx++;
+      d_lemma_cands[i][j] = concretizeTerm(d_lemma_cands[i][j]);
     }
-
-    gidx++;
   }
-
-  // if ( d_lemma_cands.size() > 0 && d_lemma_cands[0].size() > 0 )
-  // {
-  //   std::cout << "0.0. " << concretizeTerm(d_lemma_cands[0][0]) << std::endl;
-  // }
-  // else
-  // {
-  //   std::cout << "<<no lemmas to concretize>>" << std::endl;
-  // }
 }
 
 } // namespace quantifiers

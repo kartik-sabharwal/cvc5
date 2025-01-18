@@ -122,7 +122,11 @@ class MyQuantifiersModule : public QuantifiersModule
 
   Node concretizeTerm(Node in_term);
 
-  void showConcreteLemmaCandidates();
+  void concretizeLemmaCandidates();
+
+  Node replaceSkVarsWithBoundVars(Node orig);
+
+  void replaceSkVarsWithBoundVarsInCands();
 
   // @Kartik.  All equivalence classes in the current model.
   std::vector<Node> d_eqcs;
