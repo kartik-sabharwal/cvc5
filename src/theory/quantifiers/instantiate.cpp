@@ -32,6 +32,12 @@
 #include "theory/quantifiers/term_registry.h"
 #include "theory/quantifiers/term_util.h"
 #include "theory/rewriter.h"
+// @Kartik 11:33 Jan 23.
+// I want to grab the time in ms to print with each instance using 
+// `gettimeofday()`.
+#include <sys/time.h>
+// * * *
+
 
 using namespace cvc5::internal::kind;
 using namespace cvc5::context;
@@ -361,6 +367,26 @@ bool Instantiate::addInstantiationInternal(
   ill->d_list.push_back(body);
   // add to temporary debug statistics (# inst on this round)
   d_instDebugTemp[q]++;
+  // @Kartik 1:17 Jan 17.
+  // I want to print the QID of the formula being instantiated and the
+  // formula's arguments, as if the QID is a function name and its arguments
+  // are the function's arguments.
+  if ( TraceIsOn("inst_specific") )
+  {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int64_t tstamp = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+
+    Trace("inst_specific") << "(" << tstamp << " " << q;
+    {
+      for ( auto term : terms )
+      {
+        Trace("inst_specific") << " " << term;
+      }
+    }
+    Trace("inst_specific") << ")" << std::endl;
+  }
+  // * * *
   if (TraceIsOn("inst"))
   {
     Trace("inst") << "*** Instantiate [" << id << "] " << q << " with "
