@@ -23,6 +23,8 @@
 #include "preprocessing/preprocessing_pass_context.h"
 #include "smt/env.h"
 #include "theory/substitutions.h"
+#include "theory/quantifiers/quantifiers_attributes.h"
+#include "util/string.h"
 
 namespace cvc5::internal {
 namespace preprocessing {
@@ -51,6 +53,41 @@ PreprocessingPassResult ApplySubsts::applyInternal(
     {
       continue;
     }
+
+    // Kartik.  If the formula is universally quantified and has the ID
+    // 'definition' we preserve it.
+    const Node& phi = (*assertionsToPreprocess)[i];
+
+    // Only delve deeper if the formula is annotated.
+    if (phi.getNumChildren() == 3)
+    {
+      const Node& anns = phi[2];
+
+      // Find the first child of the annotations node that has the
+      // kind INST_ATTRIBUTE and whose own first child has the kind
+      // CONST_STRING and the value "qid".
+      for (size_t ann_idx = 0; ann_idx < anns.getNumChildren(); ann_idx++)
+      {
+        const Node& ann = anns[ann_idx];
+        
+        if (ann.getKind() == Kind::INST_ATTRIBUTE)
+        {
+          const Node& key_node = ann[0];
+          
+          if (key_node.getKind() == Kind::CONST_STRING)
+          {
+            const std::string& key_str = key_node.getConst<String>().toString();
+
+            if (key_str == "qid" && ann[1].getName() == "definition")
+            {
+              d_env.preserveFormula(phi);
+            }
+          }
+        }
+      }
+    }
+    // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+    
     Trace("apply-substs") << "applying to " << (*assertionsToPreprocess)[i]
                           << std::endl;
     d_preprocContext->spendResource(Resource::PreprocessStep);

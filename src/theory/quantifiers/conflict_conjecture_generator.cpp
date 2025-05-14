@@ -16,7 +16,9 @@
 #include "theory/quantifiers/conflict_conjecture_generator.h"
 
 #include "expr/node_algorithm.h"
+#include "expr/skolem_manager.h"
 #include "expr/subs.h"
+#include "expr/dtype_cons.h"
 #include "options/quantifiers_options.h"
 #include "smt/set_defaults.h"
 #include "theory/quantifiers/first_order_model.h"
@@ -27,6 +29,10 @@
 #include "theory/quantifiers/term_tuple_enumerator.h"
 #include "theory/smt_engine_subsolver.h"
 #include "util/random.h"
+#include "expr/sygus_grammar.h"
+#include "theory/quantifiers/sygus/sygus_grammar_cons.h"
+#include "expr/sygus_term_enumerator.h"
+#include "theory/quantifiers/sygus/sygus_enumerator.h"
 
 using namespace cvc5::internal::kind;
 using namespace cvc5::context;
@@ -84,7 +90,9 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
   {
     return;
   }
+
   Trace("cconj") << "ConflictConjectureGenerator: check" << std::endl;
+  
   // update the function definitions
   d_funDefEvaluator.clear();
   quantifiers::FirstOrderModel* model = d_treg.getModel();
@@ -95,14 +103,18 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
   {
     Node phi = model->getAssertedQuantifier(i);
     Trace("ccgen-debug") << "- quant : " << phi << std::endl;
-    if (d_qreg.getQuantAttributes().isFunDef(phi))
-    {
-      Trace("ccgen-debug") << "  fun def: " << phi << std::endl;
-      d_funDefEvaluator.assertDefinition(phi);
-    }
+
+    // if (d_qreg.getQuantAttributes().isFunDef(phi))
+    // {
+    //   Trace("ccgen-debug") << "  fun def: " << phi << std::endl;
+    //   d_funDefEvaluator.assertDefinition(phi);
+    // }
+
     // record symbols
     expr::getSymbols(phi, qsyms, qvisited);
   }
+  setUpFunDefEvaluator();
+
   d_ee = d_qstate.getEqualityEngine();
   d_eqcGen.clear();
   d_eqcGenRec.clear();
@@ -700,12 +712,24 @@ bool ConflictConjectureGenerator::filterConjecture(const Node& clem)
   }
   Node a = clem[0];
   Node b = clem[1];
+
+  if (options().quantifiers.ccgenFilterEval)
+  {  
+    Trace("cconj-filter") << "Try filter based on evaluation" << std::endl;
+    if (filterEvalsToFalse(a, b))
+    {
+      Trace("cconj-filter") << "...filtered based on evaluation" << std::endl;
+      return true;
+    }
+  }
+  
   Trace("cconj-filter") << "Try filter based on E-matching" << std::endl;
   if (filterEmatching(a, b))
   {
     Trace("cconj-filter") << "...filtered based on E-matching" << std::endl;
     return true;
   }
+
   Trace("cconj-filter") << "Try filter based on deductively entailed"
                         << std::endl;
   if (filterDeductivelyEntailed(a, b))
@@ -714,6 +738,7 @@ bool ConflictConjectureGenerator::filterConjecture(const Node& clem)
                           << std::endl;
     return true;
   }
+  
   return false;
 }
 
@@ -836,6 +861,608 @@ bool ConflictConjectureGenerator::filterDeductivelyEntailed(const Node& a,
   Result r = dentChecker->checkSat();
   Trace("cconj-filter") << "  ...got : " << r << std::endl;
   return (r.getStatus() == Result::UNSAT);
+}
+
+void ConflictConjectureGenerator::runFunDefEvaluatorExperiment()
+{
+  // Putting this here to see if we can provide an ad-hoc definition to the
+  // FunDefEvaluator.
+
+  // --Retrieve a reference to the current NodeManager and a reference to the
+  // current NodeManager
+
+  NodeManager* node_mgr = nodeManager();
+
+  SkolemManager* sk_mgr = node_mgr->getSkolemManager();
+  
+  // --First we create a datatype
+
+  // ----Create a DType instance
+
+  DType my_nat_def("myNat");
+
+  // ----Create the constructor instances
+
+  std::shared_ptr<DTypeConstructor> my_zero_def =
+      std::shared_ptr<DTypeConstructor>(new DTypeConstructor("myZ"));
+
+  std::shared_ptr<DTypeConstructor> my_succ_def =
+      std::shared_ptr<DTypeConstructor>(new DTypeConstructor("myS"));
+
+  my_succ_def->addArgSelf("myP");
+
+  // ----Add references to these constructors to the DType instance
+
+  my_nat_def.addConstructor(my_zero_def);
+
+  my_nat_def.addConstructor(my_succ_def);
+  
+  // ----Transform the DType instance into a TypeNode
+
+  const TypeNode& my_nat = node_mgr->mkDatatypeType(my_nat_def);
+
+  // --Then we declare a function over that datatype
+
+  // ----Create the function type
+
+  const TypeNode& my_plus_typ = node_mgr->mkFunctionType({my_nat, my_nat, my_nat});
+  
+  // ----Make a dummy skolem with the function's type
+
+  const Node& my_plus = sk_mgr->mkDummySkolem("my_plus", my_plus_typ);
+  
+  // --We create a definition for the function
+
+  // ----Reset my_nat_def to its resolved version
+
+  my_nat_def = my_nat.getDType();
+  
+  // ----Fetch the constructors, testers and selectors
+
+  const Node& my_zero = my_nat_def[0].getConstructor();
+  const Node& my_is_zero = my_nat_def[0].getTester();
+  const Node& my_succ = my_nat_def[1].getConstructor();
+  const Node& my_pred = my_nat_def[1].getSelector(0);
+  
+  // ----Now construct the entire definition
+
+  // x0
+  const Node& x0 = d_tc.getCanonicalFreeVar(my_nat, 0);
+
+  // x1
+  const Node& x1 = d_tc.getCanonicalFreeVar(my_nat, 1);
+
+  // e0 := my_pred(x0)
+  const Node& e0 = node_mgr->mkNode(Kind::APPLY_SELECTOR, my_pred, x0);
+
+  // e1 := my_plus(my_pred(x0), x1)
+  const Node& e1 = node_mgr->mkNode(Kind::APPLY_UF, my_plus, e0, x1);
+
+  // e2 := my_succ(my_plus(my_pred(x0), x1))
+  const Node& e2 = node_mgr->mkNode(Kind::APPLY_CONSTRUCTOR, my_succ, e1);
+
+  // e3 := my_is_zero(x0)
+  const Node& e3 = node_mgr->mkNode(Kind::APPLY_TESTER, my_is_zero, x0);
+
+  // e4 := ite(my_is_zero(x0), x1, my_succ(my_plus(my_pred(x0), x1)))
+  const Node& e4 = node_mgr->mkNode(Kind::ITE, e3, x1, e2);
+
+  // e9 := my_plus(x0, x1)
+  Node e9 = node_mgr->mkNode(Kind::APPLY_UF, my_plus, x0, x1);
+
+  // Need to annotate e9 in just the right way for it to be recognized as a definition.
+  Node aexpr = node_mgr->mkNode(Kind::INST_ATTRIBUTE, e9);
+  aexpr = node_mgr->mkNode(Kind::INST_PATTERN_LIST, aexpr);
+  FunDefAttribute fda;
+  e9.setAttribute(fda, true);
+  
+  // e10 := my_plus(x0, x1) = ite(my_is_zero(x0),
+  //                              x1,
+  //                              my_succ(my_plus(my_pred(x0), x1)))
+  const Node& e10 = node_mgr->mkNode(Kind::EQUAL, e9, e4);
+
+  // [x0, x1]
+  const Node& e5 = node_mgr->mkNode(Kind::BOUND_VAR_LIST, x0, x1);
+
+  // forall [x0, x1].
+  //   my_plus(x0, x1) = ite(my_is_zero(x0),                   
+  //                         x1,                               
+  //                         my_succ(my_plus(my_pred(x0), x1)))
+  const Node& my_plus_def = node_mgr->mkNode(Kind::FORALL, e5, e10, aexpr);
+  
+  // --Clear the FunDefEvaluator
+
+  d_funDefEvaluator.clear();
+
+  // --We add the universally quantified formula to the FunDefEvaluator
+
+  d_funDefEvaluator.assertDefinition(my_plus_def);
+
+  // --We create a term we want to evaluate
+
+  const Node& e6 = node_mgr->mkNode(Kind::APPLY_CONSTRUCTOR, my_zero);
+  const Node& e7 = node_mgr->mkNode(Kind::APPLY_CONSTRUCTOR, my_succ, e6);
+  const Node& e8 = node_mgr->mkNode(Kind::APPLY_CONSTRUCTOR, my_succ, e7);
+  const Node& raw_term = node_mgr->mkNode(Kind::APPLY_UF, my_plus, e8, e7);
+
+  // --We evaluate the term
+
+  const Node& evaled_term = d_funDefEvaluator.evaluateDefinitions(raw_term);
+
+  // --Some printing
+
+  Trace("ccgen-experiment") << "definition is " << my_plus_def << std::endl;
+  Trace("ccgen-experiment") << raw_term << " --evaluate--> " << evaled_term << std::endl;
+
+  // -- Done!
+  
+  return;
+}
+
+void ConflictConjectureGenerator::setUpFunDefEvaluator()
+{
+  const CDList<Node>& preserved_formulas = d_env.getPreservedFormulas();
+
+  // Organize preserved formulas by head symbol.  Each preserved formula is
+  // expected to have the form:
+  // 
+  //     (forall (VARS ...)
+  //       (! (=> TEST (= (HEAD VARS ...) BODY))))
+  //
+
+  std::map<Node, std::vector<Node>> head_to_rules;
+
+  for (const Node& phi : preserved_formulas)
+  {
+    head_to_rules[phi[1][1][0].getOperator()].push_back(phi);
+  }
+
+  // if (TraceIsOn("ccgen-preserved"))
+  // {
+  //   for (std::map<Node, std::vector<Node>>::iterator entry =
+  //            head_to_rules.begin();
+  //        entry != head_to_rules.end();
+  //        entry++)
+  //   {
+  //     Trace("ccgen-preserved")
+  //         << "Rules with head " << entry->first << " are" << std::endl;
+
+  //     for (std::vector<Node>::iterator rule = entry->second.begin();
+  //          rule != entry->second.end(); rule++)
+  //     {
+  //       Trace("ccgen-preserved") << "* " << *rule << std::endl;
+  //     }
+  //   }
+  // }
+
+  // Reconstruct definition for each head function symbol using its associated
+  // formulas.
+
+  NodeManager* node_mgr = nodeManager();
+  SkolemManager* sk_mgr = node_mgr->getSkolemManager();
+  
+  for (std::map<Node, std::vector<Node>>::iterator entry =
+           head_to_rules.begin();
+       entry != head_to_rules.end();
+       entry++)
+  {
+    // The function symbol for which we want to synthesize a definition.
+    const Node& func_sym = entry->first;
+
+    // The function's argument types
+    const std::vector<TypeNode>& formal_typs = func_sym.getType().getArgTypes();
+
+    // The variables that serve as the function's formal parameters.  This will
+    // serve as the range of each substitution.
+    std::vector<Node> formals;
+
+    for (const TypeNode& typ : formal_typs)
+    {
+      formals.push_back(sk_mgr->mkDummySkolem("x", typ));
+    }
+
+    // The current state of the definition we're building.
+    Node state = Node::null();
+
+    // Loop over available rules to build state.
+    for (const Node& rule : entry->second)
+    {
+      // Snatch the bound variables of the universally quantified rule and place
+      // them in a vector.  This vector will be the substitution's domain.
+      const Node& bvs_node = rule[0];
+
+      std::vector<Node> bvs;
+      bvs.insert(bvs.end(), bvs_node.begin(), bvs_node.end());
+
+      // Put the domain and range together to make a substitution.
+      Subs sigma;
+
+      sigma.add(bvs, formals);
+      
+      // Apply the substitution to the body of the universally quantified
+      // formula that is rule.
+      const Node& body = sigma.apply(rule[1]);
+      
+      // Retrieve the test after the substitution.
+      const Node& test = body[0];
+
+      // Retrieve the rhs after the substitution.
+      const Node& rhs = body[1][1];
+
+      // Update the state
+      if (state.isNull())
+      {
+        state = rhs;
+      }
+      else
+      {
+        state = node_mgr->mkNode(Kind::ITE, test, rhs, state);
+      }
+    }
+
+    // func_sym(formals ...), then annotations.
+    std::vector<Node> func_app_children{func_sym};
+
+    func_app_children.insert(func_app_children.end(), formals.begin(), formals.end());
+    
+    Node func_app = node_mgr->mkNode(Kind::APPLY_UF, func_app_children);
+
+    Node attr_expr = node_mgr->mkNode(Kind::INST_ATTRIBUTE, func_app);
+
+    attr_expr = node_mgr->mkNode(Kind::INST_PATTERN_LIST, attr_expr);
+
+    FunDefAttribute fun_def_attr;
+
+    func_app.setAttribute(fun_def_attr, true);
+    
+    // func_sym(formals ...) == state
+    const Node& func_rule = node_mgr->mkNode(Kind::EQUAL, func_app, state);
+
+    // forall (formals ...). func_sym(formals ...) == state
+    const Node& func_defn =
+        node_mgr->mkNode(Kind::FORALL,
+                         node_mgr->mkNode(Kind::BOUND_VAR_LIST, formals),                         
+                         func_rule, attr_expr);
+
+    // Submit definition to FunDefEvaluator instance.
+    d_funDefEvaluator.assertDefinition(func_defn);
+  }
+}
+
+bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
+                                                     const Node& rhs)
+{
+  Trace("ccgen-filter-eval")
+      << "* * * * *" << std::endl
+      << "looking at " << lhs << " == " << rhs << std::endl;
+
+  // We already set up the FunDefEvaluator in check() as d_funDefEvaluator.
+
+  // Collect all free variables in (lhs == rhs) as a vector with no repetitions.
+
+  std::unordered_set<Node> fvs_set;
+  expr::getFreeVariables(lhs, fvs_set);
+  expr::getFreeVariables(rhs, fvs_set);
+  std::vector<Node> fvs;
+  fvs.insert(fvs.end(), fvs_set.begin(), fvs_set.end());
+
+  if (TraceIsOn("ccgen-filter-eval"))
+  {
+    Trace("ccgen-filter-eval") << "with free variables {";
+    bool first_time = true;
+    for (const Node& fv : fvs)
+    {
+      if (first_time)
+      {
+        first_time = false;
+      }
+      else
+      {
+        Trace("ccgen-filter-eval") << ", ";
+      }
+      Trace("ccgen-filter-eval") << fv;
+    }
+    Trace("ccgen-filter-eval") << "}" << std::endl;
+  }
+
+  // Prepare the grammar for enumerating tuples of free variables.
+
+  //   This dictionary will map each free variable type to a grammar.
+
+  std::map<TypeNode, SygusGrammar> typ_to_gr;
+
+  //   Let's populate the dictionary with the initial version of each type's grammar.
+
+  for (const Node& fv : fvs)
+  {
+    const TypeNode& typ = fv.getType();
+
+    if (typ_to_gr.find(typ) == typ_to_gr.end())
+    {
+      typ_to_gr.emplace(std::make_pair(
+          typ, SygusGrammarCons::mkDefaultGrammar(d_env, typ, Node::null())));
+    }
+  }
+
+  //   The grammars have unwanted production rules and need to be cleaned up.
+  //   For datatype-sorted non-terminals we remove any rule with kind ITE or
+  //   APPLY_SELECTOR.  For non-terminals of other types we remove all rules and
+  //   replace them with the 'any constant' rule.
+
+  for (std::map<TypeNode, SygusGrammar>::iterator typ_gr_pair =
+           typ_to_gr.begin();
+       typ_gr_pair != typ_to_gr.end();
+       typ_gr_pair++)
+  {
+    SygusGrammar& gr = typ_gr_pair->second;
+
+    // Collect all the rules that we need to remove from the grammar.
+
+    std::vector<std::pair<Node, Node>> rules_to_remove;
+
+    for (const Node& nt : gr.getNtSyms())
+    {
+      for (const Node& rule : gr.getRulesFor(nt))
+      {
+        if (nt.getType().isDatatype())
+        {
+          if (rule.getKind() == Kind::ITE
+              || rule.getKind() == Kind::APPLY_SELECTOR)
+          {
+            rules_to_remove.emplace_back(std::pair<Node, Node>{nt, rule});
+          }
+        }
+        else
+        {
+          rules_to_remove.emplace_back(std::pair<Node, Node>{nt, rule});
+        }
+      }
+    }
+
+    // Remove all the rules as intended.
+
+    for (std::vector<std::pair<Node, Node>>::iterator nt_rule_pair =
+             rules_to_remove.begin();
+         nt_rule_pair != rules_to_remove.end();
+         nt_rule_pair++)
+    {
+      gr.removeRule(nt_rule_pair->first, nt_rule_pair->second);
+    }
+
+    // Add 'any constant' rules for non-terminals that have types that are not
+    // inductive datatypes.
+
+    for (const Node& nt : gr.getNtSyms())
+    {
+      const TypeNode& typ = nt.getType();
+
+      if (!typ.isDatatype())
+      {
+        gr.addAnyConstant(nt, typ);
+      }
+    }
+  }
+
+  //   Isolate the root non-terminal for each argument's grammar.  For example, I
+  //   expect type T's grammar to have exactly one non-terminal of type T.  This
+  //   non-terminal is treated as the start non-terminal.
+
+  std::map<TypeNode, Node> typ_to_nt;
+
+  for (auto entry : typ_to_gr)
+  {
+    TypeNode typ = entry.first;
+
+    for (auto nt : entry.second.getNtSyms())
+    {
+      if (nt.getType() == typ)
+      {
+        typ_to_nt[typ] = nt;
+
+        break;
+      }
+    }
+  }
+
+  //   We need to construct the type of n-tuples, the "root" type.
+
+  std::vector<TypeNode> elt_typs;
+
+  for (const Node& fv : fvs)
+  {
+    elt_typs.push_back(fv.getType());
+  }
+
+  const TypeNode& rt_typ = nodeManager()->mkTupleType(elt_typs);
+  
+  //   We then manufacture a dummy skolem of the root type.
+
+  Node rt_nt =
+      nodeManager()->getSkolemManager()->mkDummySkolem("root_nt", rt_typ);
+
+  //   Collect all the non-terminals -- all non-terminals across all argument
+  //   grammars as well as the non-terminal for the tuple -- in a "master list".
+
+  std::vector<Node> all_nts{rt_nt};
+
+  for (auto entry : typ_to_gr)
+  {
+    std::vector<Node> gr_nts = entry.second.getNtSyms();
+    all_nts.insert(all_nts.end(), gr_nts.begin(), gr_nts.end());
+  }
+
+  //   Use all_nts to construct the root grammar.
+
+  SygusGrammar rt_gr(std::vector<Node>{}, all_nts);
+
+  //   Make the sole production rule for rt_nt.  To do this we need to grab the
+  //   sole constructor of the datatype rt_typ and apply the constructor to the
+  //   non-terminal for each type in elt_typ.
+
+  std::vector<Node> rt_rule_children{ rt_typ.getDType()[0].getConstructor() };
+
+  for (const TypeNode& typ : elt_typs)
+  {
+    rt_rule_children.push_back(typ_to_nt[typ]);
+  }
+
+  Node rt_rule = nodeManager()->mkNode(Kind::APPLY_CONSTRUCTOR, rt_rule_children);
+
+  //   Associate rt_rule with rt_nt in rt_gr.
+
+  rt_gr.addRule(rt_nt, rt_rule);
+
+  //   Add all rules for all non-terminals across all argument grammars to the
+  //   root grammar.
+
+  for (auto entry : typ_to_gr)
+  {
+    SygusGrammar gr = entry.second;
+
+    for (auto nt : gr.getNtSyms())
+    {
+      for (auto rule : gr.getRulesFor(nt))
+      {
+        rt_gr.addRule(nt, rule);
+      }
+    }
+  }
+
+  //   Before we resolve the grammar let's make sure we have exactly what we need
+  //   by printing all its non-terminals and associated rules.
+
+  if (TraceIsOn("ccgen-filter-eval"))
+  {
+    Trace("ccgen-filter-eval")
+        << "Here are rules for each non-terminal." << std::endl;
+    for (auto nt : rt_gr.getNtSyms())
+    {
+      Trace("ccgen-filter-eval") << "* " << nt << ":" << std::endl;
+      for (auto rule : rt_gr.getRulesFor(nt))
+      {
+        Trace("ccgen-filter-eval") << "  * " << rule << std::endl;
+      }
+    }
+  }
+
+  //   We need to resolve the grammar, quitting early if resolution fails.
+
+  const TypeNode& rt_gr_typ = rt_gr.resolve();
+
+  Assert(rt_gr.isResolved());
+
+  // Initialize the SygusTermEnumerator class.
+
+  SygusTermEnumerator rt_gr_enum(d_env, rt_gr_typ);
+
+  // Enumerate a number of tuples and therefore substitutions.
+
+  //   We need to retrieve or decide the number of tuples to generate.
+
+  size_t limit = 10;
+
+  //   Let's generate the limit-many substitution ranges (tuples).
+
+  std::vector<Node> rngs;
+
+  size_t n_rngs = 0;
+
+  bool first_time = n_rngs < limit;
+
+  while (first_time || (n_rngs < limit && rt_gr_enum.increment()))
+  {
+    if (first_time)
+    {
+      first_time = false;
+    }
+
+    const Node& next_rng = rt_gr_enum.getCurrent();
+
+    if (!next_rng.isNull())
+    {
+      rngs.push_back(next_rng);
+
+      n_rngs++;
+    }
+  }
+
+  if (TraceIsOn("ccgen-filter-eval"))
+  {
+    Trace("ccgen-filter-eval")
+        << "Generated substitution ranges:" << std::endl;
+
+    for (const Node& rng : rngs)
+    {
+      Trace("ccgen-filter-eval") << "* " << rng << std::endl;
+    }
+  }
+
+  // Apply the substitutions, evaluate the terms, and check whether equality is
+  // entailed.
+
+  //   Make an instance of cvc5::internal::Subs, then use the apply() method.
+  //   Let's see if we can extract the range of the substitution somehow.
+  //   You want to produce rng_args from rng by scrapping the constructor.
+  //   You'll use add(fvs, ???)
+
+  // EntailmentCheck* ent_chk = d_treg.getEntailmentCheck();
+  
+  for (const Node& rng : rngs)
+  {
+    Subs sigma;
+
+    // This is rng as a vector instead of a tuple.  We can't feed a tuple to sigma.
+    std::vector<Node> rng_args;
+    rng_args.insert(rng_args.end(), rng.begin(), rng.end());
+
+    sigma.add(fvs, rng_args);
+
+    // image of lhs under sigma
+    const Node& lhs_img = sigma.apply(lhs);
+
+    // Trace("ccgen-filter-eval") << "!! just about to evaluate " << lhs << " !!" << std::endl;
+    
+    // reduced lhs
+    const Node& lhs_red = d_funDefEvaluator.evaluateDefinitions(lhs_img);
+
+    // Trace("ccgen-filter-eval") << "!! just about to retrieve entailed term for " << lhs_red << " !!" << std::endl;
+    
+    // representative of lhs
+    // const Node& lhs_rep = d_ee->getRepresentative(ent_chk->getEntailedTerm(lhs_red));
+
+    // same for rhs
+
+    const Node rhs_img = sigma.apply(rhs);
+
+    // Trace("ccgen-filter-eval") << "!! just about to evaluate " << rhs << " !!" << std::endl;
+    
+    const Node& rhs_red = d_funDefEvaluator.evaluateDefinitions(rhs_img);
+
+    // Trace("ccgen-filter-eval") << "!! just about to retrieve entailed term for " << rhs_red << " !!" << std::endl;
+
+    // const Node& rhs_rep = d_ee->getRepresentative(ent_chk->getEntailedTerm(rhs_red));
+
+    // Trace("ccgen-filter-eval") << "!! retrieved !!" << std::endl;
+    
+    Trace("ccgen-filter-eval") << "checking whether " << lhs_img << " == " << rhs_img << "... ";
+    
+    if (lhs_red == rhs_red)
+    {
+      Trace("ccgen-filter-eval") << "entailment check says yes." << std::endl;
+    }
+    else
+    {
+      Trace("ccgen-filter-eval") << "entailment check says no." << std::endl << std::endl;
+
+      return true;
+    }
+  }
+
+  // If equality is always entailed we return false and quit.
+
+  Trace("ccgen-filter-eval") << "all equal!" << std::endl << std::endl;
+  
+  return false;
 }
 
 }  // namespace quantifiers

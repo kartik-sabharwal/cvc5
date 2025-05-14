@@ -132,6 +132,12 @@ class ConflictConjectureGenerator : public QuantifiersModule
   bool filterEmatching(const Node& a, const Node& b);
 
   bool filterDeductivelyEntailed(const Node& a, const Node& b);
+
+  void runFunDefEvaluatorExperiment();
+
+  void setUpFunDefEvaluator();
+
+  bool filterEvalsToFalse(const Node& lhs, const Node& rhs);
 };
 
 }  // namespace quantifiers

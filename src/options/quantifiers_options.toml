@@ -959,6 +959,14 @@ name   = "Quantifiers"
   type       = "int64_t"
   default    = "15"
   help       = "number of runs to generalize terms"
+
+[[option]]
+  name       = "ccgenFilterEval"
+  category   = "expert"
+  long       = "ccgen-filter-eval"
+  type       = "bool"
+  default    = "false"
+  help       = "prune candidate conjectures using the built-in interpreter on sygus-generated terms"
   
 ### Synthesis options
 

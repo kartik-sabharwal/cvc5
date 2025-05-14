@@ -46,6 +46,7 @@ Env::Env(NodeManager* nm, const Options* opts)
     : d_nm(nm),
       d_context(new context::Context()),
       d_userContext(new context::UserContext()),
+      d_preserved_formulas(d_context.get()),
       d_pfManager(nullptr),
       d_proofNodeManager(nullptr),
       d_rewriter(new theory::Rewriter(nm)),
@@ -391,5 +392,15 @@ Node Env::getSharableFormula(const Node& n) const
   on = senc.convert(on);
   return on;
 }
+
+const context::CDList<Node>& Env::getPreservedFormulas()
+{
+  return d_preserved_formulas;
+}
+
+void Env::preserveFormula(const Node& phi)
+{
+  d_preserved_formulas.push_back(phi);
+}    
 
 }  // namespace cvc5::internal
