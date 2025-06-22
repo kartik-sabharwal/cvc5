@@ -248,6 +248,7 @@ Node ConflictConjectureGenerator::getOrMkVarForEqc(const Node& e)
   d_bvToEqc[v] = e;
   return v;
 }
+
 const std::vector<Node>& ConflictConjectureGenerator::getGenForEqc(
     const Node& e)
 {
@@ -298,6 +299,18 @@ const std::vector<Node>& ConflictConjectureGenerator::getGenForEqc(
 
 void ConflictConjectureGenerator::getGeneralizations(const Node& v)
 {
+  if (TraceIsOn("ccgen-terms"))
+  {
+    Trace("ccgen-terms") << "d_bv is" << std::endl;
+    for (std::map<Node, Node>::iterator entry = d_bv.begin();
+         entry != d_bv.end();
+         entry++)
+    {
+      Trace("ccgen-terms") << "* " << entry->first << " -> " << entry->second
+                           << std::endl;
+    }
+  }
+
   Assert(v.getKind() == Kind::BOUND_VARIABLE);
   if (d_eqcGenRec.find(v) != d_eqcGenRec.end())
   {
@@ -317,7 +330,7 @@ void ConflictConjectureGenerator::getGeneralizations(const Node& v)
 
 void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
 {
-  size_t depth = 5;
+  size_t depth = 3;
   Node cur = v;
   // the current free variables of cur
   std::vector<Node> fvs;
@@ -328,9 +341,30 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   for (size_t i = 0; i < depth; i++)
   {
     Node vc = fvs[rindex];
-    Trace("ccgen-debug") << "process " << vc << std::endl;
+    Trace("ccgen-debug-expand") << "process " << vc << std::endl;
     Assert(d_bvToEqc.find(vc) != d_bvToEqc.end());
     const std::vector<Node>& gens = getGenForEqc(d_bvToEqc[vc]);
+
+    if (TraceIsOn("ccgen-debug"))
+    {
+      Trace("ccgen-debug") << "expansions [";
+      bool first_time = true;
+      for (const Node& expansion : gens)
+      {
+        if (!first_time)
+        {
+          Trace("ccgen-debug") << ", ";
+        }
+
+        Trace("ccgen-debug") << expansion;
+        
+        first_time = false;
+      }
+      Trace("ccgen-debug") << "]" << std::endl;
+
+      Trace("ccgen-debug") << "substitution " << subs << std::endl;
+    }
+     
     if (gens.empty())
     {
       rindex = rindex + 1 == fvs.size() ? 0 : rindex + 1;
@@ -348,7 +382,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
       // cyclic, skip
       continue;
     }
-    Trace("ccgen-debug") << "...expand to " << gs << std::endl;
+    Trace("ccgen-debug-expand") << "...expand to " << gs << std::endl;
     std::vector<Node> newVars;
     if (g.getNumChildren() > 0)
     {
