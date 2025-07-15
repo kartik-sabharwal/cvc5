@@ -195,6 +195,16 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
 
 void ConflictConjectureGenerator::buildGrammarFromContext()
 {
+  // This stores the current interpretation of each variable symbol and each
+  // function symbol.
+  quantifiers::FirstOrderModel* mdl = d_treg.getModel();
+  
+  // These are all the function symbols that *might* be recursively defined.  If
+  // there is any doubt we choose to err on the side of caution.
+  const std::vector<Node> rec_fun_syms = collectRecursivelyDefinedFunctionSymbols(mdl);
+
+  return;
+  
   // We'll use this to store the equalities in the equivalence class of false.
   std::vector<Node> assm_false_eqns;
 
@@ -232,13 +242,9 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
 
   // We'll concretize the terms in assm_false_eqns using their model values.
 
-  // This stores the current interpretation of each variable symbol and each
-  // function symbol.
-  quantifiers::FirstOrderModel* mdl = d_treg.getModel();
-
   // At the moment let's go over all the assumed-false equalities and print
-  // their symbols.  Once we have that we can decide which symbols need to be
-  // replaced with their model value.
+  // the symbols that occur in them.  Once we have that, we can decide which
+  // symbols need to be replaced with their model values.
   Trace("build-grammar-from-context")
   << "The following equalities are asserted false:" << std::endl;
   for (const Node& assm_fls_eqn : assm_false_eqns)
@@ -257,11 +263,7 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
     std::unordered_set<Node> syms;
     // The following statement actually populates SYMS.
     expr::getSymbols(assm_fls_eqn, syms);
-    // The following loop populates CONCRETIZER.  We attempt to
-    // explicitly name the symbols that are not first class so that we
-    // get a better idea of which symbols are not concretized.  The
-    // model values for recursive functions are not trustworthy
-    // either.  The 
+    // The following loop populates CONCRETIZER.
     {
       Trace("build-grammar-from-context") << "Leaving symbols {";
       // Is it the first time we're printing a symbol in the following loop?
@@ -274,7 +276,10 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
         // term whose type is not 'first class'.  Constructor terms are not
         // 'first class'.  It is also misleading to get the model value of a
         // recursively-defined function because will only satisfy the instances
-        // of the definition that are currently in scope.
+        // of the definition that are currently in scope.  How can we discover
+        // which function symbols have been recursively defined?  At a first
+        // approximation we can check for asserted universally quantified
+        // formulas that have the form f(x,y) = e[f(s, t)].
         if (sym_typ.isFirstClass())
         {
           concretizer.add(sym, mdl->getValue(sym));
@@ -299,7 +304,35 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
     const Node& concr_assm_fls_eqn = concretizer.apply(assm_fls_eqn);
     Trace("build-grammar-from-context") << concr_assm_fls_eqn << std::endl;
   }
-}    
+}
+
+const std::vector<Node> ConflictConjectureGenerator::collectRecursivelyDefinedFunctionSymbols(quantifiers::FirstOrderModel* mdl)
+{
+  // If we find a function symbol that we believe might be recursively defined
+  // we'll add it to this vector.
+  std::vector<Node> rec_fun_syms;
+
+  // Let's run through the list of universally quantified formulas and list
+  // patterns that might help us identify definitions of recursive functions.
+  // Turns out we're looking for universally quantified formulas of the form
+  // (forall X, lhs[X] = rhs[X]) where one of lhs[X] or rhs[X] contains some
+  // function symbol 'f' at the root of its syntax tree and the other side's
+  // expression simply mentions 'f' somewhere.
+  {
+    Trace("collect-recursive") << "Asserted universally quantified formulas are:" << std::endl;
+
+    size_t n = mdl->getNumAssertedQuantifiers();
+    
+    for (size_t i = 0; i < n; i++)
+    {
+      Trace("collect-recursive") << mdl->getAssertedQuantifier(i) << std::endl;
+    }      
+  }
+
+  Trace("collect-recursive") << std::endl;
+  
+  return rec_fun_syms;
+}
 
 std::string ConflictConjectureGenerator::identify() const
 {

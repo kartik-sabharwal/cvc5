@@ -8,8 +8,11 @@ Here are the broad strokes.
 @itemlist[
 #:style 'ordered
 @item{@tt{candDeq} is populated with the equalities in the equivalence class of false.}
+
 @item{The terms in @tt{candDeq} are `concretized' using the model values of the symbols they mention.}
+
 @item{We use some approach, disregarding the exact details, to `expand' the equivalence classes of the candidate disequalities.}
+
 @;We never substitute a function with its model value.
 @;We never substitute in the model value for a symbol that appears in a universally quantified formula.
 @;We always substitute in the model value if our variable is a skolem.

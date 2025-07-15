@@ -141,6 +141,8 @@ class ConflictConjectureGenerator : public QuantifiersModule
   void setUpFunDefEvaluator();
 
   bool filterEvalsToFalse(const Node& lhs, const Node& rhs);
+
+  const std::vector<Node> collectRecursivelyDefinedFunctionSymbols(quantifiers::FirstOrderModel* mdl);
 };
 
 }  // namespace quantifiers
