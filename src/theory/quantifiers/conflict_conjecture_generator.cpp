@@ -84,6 +84,7 @@ QuantifiersModule::QEffort ConflictConjectureGenerator::needsModel(
   return QEFFORT_STANDARD;
 }
 
+
 void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
 {
   if (quant_e != QEFFORT_STANDARD)
@@ -91,6 +92,10 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     return;
   }
 
+  buildGrammarFromContext();
+
+  return;
+  
   Trace("cconj") << "ConflictConjectureGenerator: check" << std::endl;
   
   // update the function definitions
@@ -187,6 +192,114 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
   }
   Trace("cconj") << "ConflictConjectureGenerator: end check" << std::endl;
 }
+
+void ConflictConjectureGenerator::buildGrammarFromContext()
+{
+  // We'll use this to store the equalities in the equivalence class of false.
+  std::vector<Node> assm_false_eqns;
+
+  // The equality engine.
+  eq::EqualityEngine* eq_eng = d_qstate.getEqualityEngine();
+
+  // cvc5's internal representation of the literal 'false'.
+  const Node& false_node = nodeManager()->mkConst(false);
+
+  // An iterator that yields all terms in the equivalence class of false.
+  eq::EqClassIterator false_it = eq::EqClassIterator(false_node, eq_eng);
+
+  while (! false_it.isFinished())
+  {
+    // A term that is equivalent to false.
+    Node false_term = *false_it;
+  
+    // Is the term an equality?
+    if (false_term.getKind() == Kind::EQUAL)
+    {
+      // If so, add it to assm_false_eqns.
+      assm_false_eqns.push_back(false_term);
+    }
+  
+    // Move on to the next term in the equivalence class.
+    ++false_it;
+  }
+
+  // Let's print the contents of assm_false_eqns.
+  // Trace("build-grammar-from-context") << "Equalities in the equivalence class of false are: " << std::endl;
+  // for (const Node& assm_false_eqn : assm_false_eqns)
+  // {
+  //   Trace("build-grammar-from-context") << "- " << assm_false_eqn << std::endl;
+  // }
+
+  // We'll concretize the terms in assm_false_eqns using their model values.
+
+  // This stores the current interpretation of each variable symbol and each
+  // function symbol.
+  quantifiers::FirstOrderModel* mdl = d_treg.getModel();
+
+  // At the moment let's go over all the assumed-false equalities and print
+  // their symbols.  Once we have that we can decide which symbols need to be
+  // replaced with their model value.
+  Trace("build-grammar-from-context")
+  << "The following equalities are asserted false:" << std::endl;
+  for (const Node& assm_fls_eqn : assm_false_eqns)
+  {
+    Trace("build-grammar-from-context") << "** next **" << std::endl;
+    Trace("build-grammar-from-context") << "** abstract **" << std::endl;
+    Trace("build-grammar-from-context") << assm_fls_eqn << std::endl;
+    Trace("build-grammar-from-context") << "** concrete **" << std::endl;
+    // We intend to construct the concrete version of ASSM_FALSE_EQN by applying
+    // a substitution over all the symbols that occur in ASSM_FALSE_EQN.  The
+    // domain of this substitution is the set of symbols in ASSM_FALSE_EQN. Each
+    // element in the domain is mapped to its model value in MDL.
+    // CONCRETIZER will hold the substitution that concretizes ASSM_FALSE_EQN.
+    Subs concretizer;
+    // SYMS is a set that will be populated with the domain of CONCRETIZER.
+    std::unordered_set<Node> syms;
+    // The following statement actually populates SYMS.
+    expr::getSymbols(assm_fls_eqn, syms);
+    // The following loop populates CONCRETIZER.  We attempt to
+    // explicitly name the symbols that are not first class so that we
+    // get a better idea of which symbols are not concretized.  The
+    // model values for recursive functions are not trustworthy
+    // either.  The 
+    {
+      Trace("build-grammar-from-context") << "Leaving symbols {";
+      // Is it the first time we're printing a symbol in the following loop?
+      bool first_time = true;
+      for (const Node& sym : syms)
+      {
+        const TypeNode& sym_typ = sym.getType();
+
+        // cvc5 is liable to crash if we attempt to fetch the model value of a
+        // term whose type is not 'first class'.  Constructor terms are not
+        // 'first class'.  It is also misleading to get the model value of a
+        // recursively-defined function because will only satisfy the instances
+        // of the definition that are currently in scope.
+        if (sym_typ.isFirstClass())
+        {
+          concretizer.add(sym, mdl->getValue(sym));
+        }
+        else
+        {
+          if (first_time)
+          {
+            first_time = false;
+          }
+          else
+          {
+            Trace("build-grammar-from-context") << ", ";
+          }
+          Trace("build-grammar-from-context") << sym;
+        }
+      }
+    }
+    Trace("build-grammar-from-context") << "} ... ";
+    // CONCR_ASSM_FALSE_EQN as the name suggests is the concrete version of
+    // ASSM_FALSE_EQN.
+    const Node& concr_assm_fls_eqn = concretizer.apply(assm_fls_eqn);
+    Trace("build-grammar-from-context") << concr_assm_fls_eqn << std::endl;
+  }
+}    
 
 std::string ConflictConjectureGenerator::identify() const
 {

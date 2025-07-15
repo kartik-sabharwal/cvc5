@@ -92,6 +92,9 @@ class ConflictConjectureGenerator : public QuantifiersModule
   /** The options for subsolver calls */
   Options d_subOptions;
 
+  /** The function that inspects the context to build a grammar for conjecture
+   * generation. */
+  void buildGrammarFromContext();
   Node getOrMkVarForEqc(const Node& e);
   const std::vector<Node>& getGenForEqc(const Node& e);
   void checkDisequality(const Node& eq);
