@@ -84,7 +84,6 @@ QuantifiersModule::QEffort ConflictConjectureGenerator::needsModel(
   return QEFFORT_STANDARD;
 }
 
-
 void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
 {
   if (quant_e != QEFFORT_STANDARD)
@@ -201,9 +200,27 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
   
   // These are all the function symbols that *might* be recursively defined.  If
   // there is any doubt we choose to err on the side of caution.
-  const std::vector<Node> rec_fun_syms = collectRecursivelyDefinedFunctionSymbols(mdl);
+  const std::unordered_set<Node> rec_fun_syms = collectRecursivelyDefinedFunctionSymbols(mdl);
 
-  return;
+  // Let's print REC_FUN_SYMS to make sure we're captured the right function symbols.
+  // {
+  //   Trace("build-grammar-from-context") << "rec_fun_syms = {";
+  //   bool first_time = true;
+  //   for (const Node& sym : rec_fun_syms)
+  //   {
+  //     if (first_time)
+  //     {
+  //       first_time = false;
+  //     }
+  //     else
+  //     {
+  //       Trace("build-grammar-from-context") << ", ";
+  //     }
+
+  //     Trace("build-grammar-from-context") << sym;
+  //   }
+  //   Trace("build-grammar-from-context") << "}" << std::endl;
+  // }
   
   // We'll use this to store the equalities in the equivalence class of false.
   std::vector<Node> assm_false_eqns;
@@ -274,15 +291,16 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
 
         // cvc5 is liable to crash if we attempt to fetch the model value of a
         // term whose type is not 'first class'.  Constructor terms are not
-        // 'first class'.  It is also misleading to get the model value of a
-        // recursively-defined function because will only satisfy the instances
-        // of the definition that are currently in scope.  How can we discover
-        // which function symbols have been recursively defined?  At a first
-        // approximation we can check for asserted universally quantified
-        // formulas that have the form f(x,y) = e[f(s, t)].
+        // 'first class'.
         if (sym_typ.isFirstClass())
         {
-          concretizer.add(sym, mdl->getValue(sym));
+          // It is misleading to get the model value of a recursively-defined
+          // function because its model value will satisfy just the instances of
+          // the definition that are currently in scope.
+          if (rec_fun_syms.find(sym) == rec_fun_syms.end())
+          {
+            concretizer.add(sym, mdl->getValue(sym));
+          }
         }
         else
         {
@@ -299,18 +317,37 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
       }
     }
     Trace("build-grammar-from-context") << "} ... ";
+
     // CONCR_ASSM_FALSE_EQN as the name suggests is the concrete version of
-    // ASSM_FALSE_EQN.
-    const Node& concr_assm_fls_eqn = concretizer.apply(assm_fls_eqn);
+    // ASSM_FALSE_EQN.  We also rewrite the result of the substitution because
+    // Andy did it in the last iteration of the conjecture generator.
+    const Node& concr_assm_fls_eqn = rewrite(concretizer.apply(assm_fls_eqn));
+
     Trace("build-grammar-from-context") << concr_assm_fls_eqn << std::endl;
+
+    // If the disequality concretizes to false i.e. CONCR_ASSM_FLS_EQN is the
+    // same as FALSE_NODE then we throw it away because we don't expect to
+    // derive a useful conjecture from it.  On the other hand if it doesn't
+    // concretize to false it might actually be entailed (inductively or
+    // otherwise).  If we suspect that it is entailed we will conjecture a more
+    // general version and try to prove it by induction.  To investigate,
+    // we will run CONCR_ASSM_FLS_EQN through checkDisequality().
+    if (concr_assm_fls_eqn == false_node)
+    {
+      continue;
+    }
+    else
+    {
+      checkDisequality(concr_assm_fls_eqn);
+    }
   }
 }
 
-const std::vector<Node> ConflictConjectureGenerator::collectRecursivelyDefinedFunctionSymbols(quantifiers::FirstOrderModel* mdl)
+const std::unordered_set<Node> ConflictConjectureGenerator::collectRecursivelyDefinedFunctionSymbols(quantifiers::FirstOrderModel* mdl)
 {
   // If we find a function symbol that we believe might be recursively defined
   // we'll add it to this vector.
-  std::vector<Node> rec_fun_syms;
+  std::unordered_set<Node> rec_fun_syms;
 
   // Let's run through the list of universally quantified formulas and list
   // patterns that might help us identify definitions of recursive functions.
@@ -319,17 +356,99 @@ const std::vector<Node> ConflictConjectureGenerator::collectRecursivelyDefinedFu
   // function symbol 'f' at the root of its syntax tree and the other side's
   // expression simply mentions 'f' somewhere.
   {
-    Trace("collect-recursive") << "Asserted universally quantified formulas are:" << std::endl;
+    // Trace("collect-recursive") << "Asserted universally quantified formulas are:" << std::endl;
 
-    size_t n = mdl->getNumAssertedQuantifiers();
-    
+    const size_t n = mdl->getNumAssertedQuantifiers();
+
     for (size_t i = 0; i < n; i++)
     {
-      Trace("collect-recursive") << mdl->getAssertedQuantifier(i) << std::endl;
+      // The I th asserted universally quantified formula.
+      const Node& fla = mdl->getAssertedQuantifier(i);
+
+      // Let's print it.
+      // Trace("collect-recursive") << fla << std::endl;
+      
+      // The body of the aforementioned formula.
+      const Node& body = fla[1];
+
+      // We are only interested in a formula if its body is an equality.
+      if (body.getKind() == Kind::EQUAL)
+      {
+        // Does the body fit the shape of a recursive definition?  To start with
+        // let's assume it doesn't.  We can correct the assumption later.
+        Node rec_fun_sym = Node::null();
+
+        // We do one iteration of the loop from the perspective of the right
+        // hand side of the equality and one iteration from the perspective of
+        // the left hand side.
+        for (const size_t side : {0, 1})
+        {
+          // If REC_FUN_SYM is non-null we already have what we came for so we
+          // do nothing in the loop body.
+          if (!rec_fun_sym.isNull())
+          {
+            continue;
+          }
+          else
+          {
+            // When SIDE is 0, SAME is the lhs and OTHER is the rhs.  When SIDE is
+            // 1 it's the other way around.
+            const Node& same = body[side];
+            const Node& other = body[side == 0 ? 1 : 0];
+
+            // Is SAME an application of an uninterpreted function?
+            if (same.getKind() == Kind::APPLY_UF)
+            {
+              // It is!  Let's grab the function symbol for use in the next
+              // query.
+              const Node& fun_sym = same.getOperator();
+
+              // Let's also grab all the symbols that appear in OTHER.
+              std::unordered_set<Node> other_syms;
+              expr::getSymbols(other, other_syms);
+
+              // {
+              //   Trace("build-grammar-from-context")
+              //   << "fun_sym is " << fun_sym << ", while other_syms is {";
+              //   bool first_time = true;
+              //   for (const Node& sym : other_syms)
+              //   {
+              //     if (first_time)
+              //     {
+              //       first_time = false;
+              //     }
+              //     else
+              //     {
+              //       Trace("build-grammar-from-context") << ", ";
+              //     }
+
+              //     Trace("build-grammar-from-context") << sym;
+              //   }
+              //   Trace("build-grammar-from-context") << "}" << std::endl;
+              // }
+
+              // If FUN_SYM appears in OTHER_SYMS, the current assertion is
+              // likely part of a recursive definition.
+              if (other_syms.find(fun_sym) != other_syms.end())
+              {
+                rec_fun_sym = fun_sym;
+              }
+            }
+          }
+        }
+        
+        // We presume that if the body fits the shape of a recursive definition
+        // then we've set REC_FUN_SYM to be non-null.  If it is non-null we
+        // should add it to the list of recursive function symbols.
+        if (!rec_fun_sym.isNull())
+        {
+          rec_fun_syms.insert(rec_fun_sym);
+        }
+      }
     }      
   }
 
-  Trace("collect-recursive") << std::endl;
+  // Trace("collect-recursive") << std::endl;
   
   return rec_fun_syms;
 }
@@ -476,7 +595,16 @@ void ConflictConjectureGenerator::getGeneralizations(const Node& v)
 
 void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
 {
+  // To make this definition more readable replace all occurrences of the word
+  // 'generalization' with 'expansion'.
+
+  // Recall that this class maintains a 
+
+  // Node 2.  This function expands the 
+  
+  // We will find
   size_t depth = 3;
+  
   Node cur = v;
   // the current free variables of cur
   std::vector<Node> fvs;
