@@ -726,23 +726,47 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     Node g = gens[gindex];
 
     // Let's give some thought to what we're about to do here.  We have a
-    // substitution subs and we can assume that it satisfies this invariant: the
-    // domain of subs is disjoint from the set of all equivalence class
-    // variables that occur in the image of subs.  We intend to grow subs by
-    // mapping the equivalence class variable vc to some term t.  Before we add
-    // this mapping to subs we need to ensure the following.
+    // substitution subs and we want to maintain the invariant that the
+    // substitution is idempotent.  Equivalently, we want to guarantee that its
+    // domain is disjoint from the set of equivalence class variables that occur
+    // in its image.  We intend to grow subs to a new substitution (let's refer
+    // to it as subs') by mapping vc to some term gs (don't ask me why Andy
+    // named it gs).  We should ensure the following.
     //
-    // 1.  the set of equivalence class variables in t is disjoint from the
-    // domain of subs.
-    // 
-    // 2.  vc does not occur in t, and
+    // 1.  if vc is in the domain of subs then subs[v] and subs'[v] are the
+    // same,
     //
-    // 2.  vc does not occur in the image of subs
-    
+    // 2.  vc does not occur in the image of subs',
+    //
+    // 3.  none of the equivalence class variables in gs occurs in the domain of
+    // subs'.
+    //
+    // We can argue that condition #1 is already satisfied.  To ensure #3 is
+    // satisfied we define gs as subs.apply(g), then we give up whenever vc
+    // occurs in gs.  Why does this work?  g's equivalence class variables can
+    // be partitioned into those that occur in the domain of subs and those that
+    // don't.  Any variable that occurs in the domain of subs will not appear in
+    // gs because subs is idempotent.  However, vc will appear in the domain of
+    // subs' so we want to ensure that vc does not occur in gs.  Assuming vc
+    // does not occur in gs all that's left is to fulfil condition #2.  We can
+    // do this by applying the singleton substitution {vc -> gs}, which we'll
+    // later store in the variable stmp, to every term in the image of subs as
+    // we construct subs'.  Note that subs' is an abstract variable.  In truth
+    // subs is destructively modified.
+    //
+    // We should also think about how to update both cur and fvs.  To update cur
+    // we need only apply the singleton substitution {vc -> gs} to it.  I feel
+    // that to update fvs it is enough to insert the equivalence class variables
+    // of gs after vc's position and erase the element at vc's position.  The
+    // business with isDag seems unnecessary.
 
     Node gs = subs.apply(g);
 
-    if (expr::hasSubterm(gs, v)) // (expr::hasSubterm(gs, v))
+    // If vc occurs in gs we shy away from expanding vc, we still assume that
+    // the length of our walk has increased by 1, once again randomly pick an
+    // equivalence class variable that occurs in cur possibly re-grabbing vc,
+    // then fast-forward to the next iteration.
+    if (expr::hasSubterm(gs, vc))
     {
       Trace("ccgen-debug") << "...cyclic to " << gs << std::endl;
       rindex = Random::getRandom().pick(0, fvs.size() - 1);
@@ -778,6 +802,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
         continue;
       }
     }
+
     fvs.erase(fvs.begin() + rindex);
     for (const Node& gv : newVars)
     {
