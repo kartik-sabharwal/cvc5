@@ -91,9 +91,9 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     return;
   }
 
-  buildGrammarFromContext();
+  // buildGrammarFromContext();
 
-  return;
+  // return;
   
   Trace("cconj") << "ConflictConjectureGenerator: check" << std::endl;
   
@@ -598,27 +598,98 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   // To make this definition more readable replace all occurrences of the word
   // 'generalization' with 'expansion'.
 
-  // Recall that this class maintains a 
+  // Recall that this class maintains a bijection between a subset of all
+  // equivalence class representatives and a set of variables in d_bv and
+  // d_bvToEqc.  For any equivalence class representative r that has a mapping
+  // in d_bv we must have d_bvToEqc[d_bv[r]] == r.  This function assumes that
+  // the input v is the image of some equivalence class representative under
+  // d_bv.  Let's call such variables 'equivalence class variables'.  To use our
+  // new terminology, this function assumes that its input is an equivalence
+  // class variable.
 
-  // Node 2.  This function expands the 
+  // We can think of this function as performing a random walk in a graph over
+  // terms and adding the vertices visited to the vector referenced by grecs.
+  // The vertices in this graph are terms built with the equivalence class
+  // variables and function-like symbols in the signature (user-declared
+  // function symbols and constructor symbols).  Let s and t be two vertices in
+  // this graph.  There is an edge between s and t if the following conditions
+  // are met.
+  //
+  // 1.  There is an equivalence class variable x that occurs in s, in other
+  // words s can be written as s[x], and
+  //
+  // 2.  t is s[f(Y)] where f is either a user-declared function symbol or a
+  // constructor symbol and Y is a possibly empty sequence of equivalence class
+  // variables.
+  //
+  // 3.  The equivalence class of d_bvToEqc[x] contains the term
+  // f(map(d_bvToEqc, Y)) where map(d_bvToEqc, Y) denotes the sequence of terms
+  // obtained from looking up each element in Y in d_bvToEqc.
+  //
+  // In fact we can describe other relevant functions and variables in the
+  // context of this random walk.  For any equivalence class variable x, the
+  // getGenForEqc(x) returns the vertices that are reachable from x in one step
+  // (x's neighbors in the graph).  The field d_eqcGen serves as a cache for
+  // getGenForEqc().  On the other hand the vector d_eqcGenRec[x] stores a
+  // subset of the vertices that are reachable from x.  We may also view it as
+  // an approximation of all the vertices that are reachable from x.  From this
+  // perspective, getGeneralizationsInternal(v) attempts to make d_eqcGenRec[v]
+  // a better approximation of all vertices reachable from v by adding new
+  // vertices.
   
-  // We will find
+  // This is the number of expansions we will perform.  Since performing such an
+  // expansion is equivalent to taking one step in the random walk, it can be
+  // seen as the intended length of our random walk.
   size_t depth = 3;
-  
+
+  // The vertex we are currently at in the random walk.  It's initially v
+  // because our random walk starts at v.
   Node cur = v;
-  // the current free variables of cur
-  std::vector<Node> fvs;
+
+  // To take another step in our random walk we can substitute any equivalence
+  // class variable that occurs in cur with one of its expansions.  fvs is
+  // intended to keep track of all the equivalence class variables that occur in
+  // cur.
+  std::vector<Node> fvs = {v};
+
+  // grecs is our current best approximation of all the vertices that are
+  // reachable from the input equivalence class vertex v.  We hope to improve
+  // our approximation by adding all of the vertices visited by our random walk.
   std::vector<Node>& grecs = d_eqcGenRec[v];
-  fvs.push_back(v);
+
+  // subs will record the equivalence class variables we have picked to expand
+  // during our random walk as well as the expansions we have chosen.  We can
+  // think of it as a summary of the walk itself.
+  // 
+  // **Note.** By choosing to represent our walk as a substitution we force
+  // ourselves to expand an equivalence class variable the same way each time we
+  // encounter it.  It might be worth exploring a random walk strategy that
+  // allows us to expand an equivalence class variable differently each time we
+  // see it.
   Subs subs;
+
+  // We elect to expand fvs[rindex].
   size_t rindex = Random::getRandom().pick(0, fvs.size() - 1);
+
+  // One iteration of this loop for each step we intend to take in our random
+  // walk.
   for (size_t i = 0; i < depth; i++)
   {
+    // This is the equivalence class variable we have elected to expand.
     Node vc = fvs[rindex];
+
+    // Let's print our choice.
     Trace("ccgen-debug-expand") << "process " << vc << std::endl;
+
+    // Before we try to expand vc let's ensure that it's truly an equivalence
+    // class variable!
     Assert(d_bvToEqc.find(vc) != d_bvToEqc.end());
+
+    // These are vc's expansions.  They can also be described as vc's immediate
+    // neighbors in the graph.
     const std::vector<Node>& gens = getGenForEqc(d_bvToEqc[vc]);
 
+    // It may be helpful to regurgitate the contents of gens.
     if (TraceIsOn("ccgen-debug"))
     {
       Trace("ccgen-debug") << "expansions [";
@@ -638,7 +709,10 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
 
       Trace("ccgen-debug") << "substitution " << subs << std::endl;
     }
-     
+
+    // vc has no neighbors.  We still assume that the length of our walk has
+    // increased by one, we elect to expand the element at the next index in fvs
+    // (wrapping around), and skip the rest of the loop body.
     if (gens.empty())
     {
       rindex = rindex + 1 == fvs.size() ? 0 : rindex + 1;
@@ -646,16 +720,36 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
       // nothing to generalize
       continue;
     }
+
+    // We choose to expand vc to gens[gindex] which we copy over to g.
     size_t gindex = Random::getRandom().pick(0, gens.size() - 1);
     Node g = gens[gindex];
+
+    // Let's give some thought to what we're about to do here.  We have a
+    // substitution subs and we can assume that it satisfies this invariant: the
+    // domain of subs is disjoint from the set of all equivalence class
+    // variables that occur in the image of subs.  We intend to grow subs by
+    // mapping the equivalence class variable vc to some term t.  Before we add
+    // this mapping to subs we need to ensure the following.
+    //
+    // 1.  the set of equivalence class variables in t is disjoint from the
+    // domain of subs.
+    // 
+    // 2.  vc does not occur in t, and
+    //
+    // 2.  vc does not occur in the image of subs
+    
+
     Node gs = subs.apply(g);
-    if (expr::hasSubterm(gs, v))
+
+    if (expr::hasSubterm(gs, v)) // (expr::hasSubterm(gs, v))
     {
       Trace("ccgen-debug") << "...cyclic to " << gs << std::endl;
       rindex = Random::getRandom().pick(0, fvs.size() - 1);
       // cyclic, skip
       continue;
     }
+
     Trace("ccgen-debug-expand") << "...expand to " << gs << std::endl;
     std::vector<Node> newVars;
     if (g.getNumChildren() > 0)
