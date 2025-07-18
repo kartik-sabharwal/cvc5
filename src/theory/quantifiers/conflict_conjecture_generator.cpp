@@ -733,7 +733,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     // to it as subs') by mapping vc to some term gs (don't ask me why Andy
     // named it gs).  We should ensure the following.
     //
-    // 1.  if vc is in the domain of subs then subs[v] and subs'[v] are the
+    // 1.  if vc is in the domain of subs then subs[vc] and subs'[vc] are the
     // same,
     //
     // 2.  vc does not occur in the image of subs',
@@ -760,6 +760,10 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     // of gs after vc's position and erase the element at vc's position.  The
     // business with isDag seems unnecessary.
 
+    // This is the first step to ensuring that gs satisfies property #3.  After
+    // this we can be certain that the equivalence class variables that occur in
+    // gs don't also occur in the domain of subs.  However vc may still occur in
+    // gs.
     Node gs = subs.apply(g);
 
     // If vc occurs in gs we shy away from expanding vc, we still assume that
@@ -774,55 +778,93 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
       continue;
     }
 
-    Trace("ccgen-debug-expand") << "...expand to " << gs << std::endl;
-    std::vector<Node> newVars;
-    if (g.getNumChildren() > 0)
+    // If we're at this point in the code we know gs satisfies condition #3.  We
+    // just need to ensure that subs' satisfies condition #2.
+
+    // stmp is the singleton substitution {vc -> gs}.
+    Subs stmp;
+    stmp.add(vc, gs);
+
+    // This ensures that neither vc nor any equivalence class variable that
+    // occurs in the domain of subs also occurs in the image of subs.
+    stmp.applyToRange(subs);
+
+    // We destructively update subs to arrive at subs'.  Since we performed an
+    // applyToRange() above we know that the updated subs satisfies condition #2.
+    subs.add(vc, gs);
+
+    // Update cur as described above.
+    cur = stmp.apply(cur);
+
+    // Also update fvs as described above.  Removing vc is the first step.
+    fvs.erase(fvs.begin() + rindex);
+
+    // gs has the form where it's an application of a user-declared function
+    // symbol or a constructor symbol and its arguments are all equivalence
+    // class variables.  We want to add these equivalence class variables to fvs
+    // but want to maintain the invariant that fvs has no duplicates.
+    for (const Node& eqc_var : gs)
     {
-      bool isDag = false;
-      for (const Node& gv : g)
+      if (std::find(fvs.begin(), fvs.end(), eqc_var) == fvs.end())
       {
-        if (subs.contains(gv))
-        {
-          // already handled
-          isDag = true;
-        }
-        else if (std::find(fvs.begin(), fvs.end(), gv) == fvs.end())
-        {
-          newVars.push_back(gv);
-        }
-        else
-        {
-          // already in progress of being handled
-          isDag = true;
-        }
-      }
-      if (isDag)
-      {
-        rindex = Random::getRandom().pick(0, fvs.size() - 1);
-        continue;
+        fvs.insert(fvs.begin() + rindex, eqc_var);
       }
     }
 
-    fvs.erase(fvs.begin() + rindex);
-    for (const Node& gv : newVars)
-    {
-      auto it = std::lower_bound(fvs.begin(), fvs.end(), gv);
-      fvs.insert(it, gv);
-    }
-    Trace("ccgen-debug") << "...free variables now " << fvs << std::endl;
-    Subs stmp;
-    stmp.add(vc, gs);
-    cur = stmp.apply(cur);
-    stmp.applyToRange(subs);
-    subs.add(vc, gs);
-    // cur is now a candidate term
-    addGeneralizationTerm(cur, v, i, fvs);
+    // Trace("ccgen-debug-expand") << "...expand to " << gs << std::endl;
+    // std::vector<Node> newVars;
+    // if (g.getNumChildren() > 0)
+    // {
+    //   bool isDag = false;
+    //   for (const Node& gv : g)
+    //   {
+    //     if (subs.contains(gv))
+    //     {
+    //       // already handled
+    //       isDag = true;
+    //     }
+    //     else if (std::find(fvs.begin(), fvs.end(), gv) == fvs.end())
+    //     {
+    //       newVars.push_back(gv);
+    //     }
+    //     else
+    //     {
+    //       // already in progress of being handled
+    //       isDag = true;
+    //     }
+    //   }
+    //   if (isDag)
+    //   {
+    //     rindex = Random::getRandom().pick(0, fvs.size() - 1);
+    //     continue;
+    //   }
+    // }
+
+    // fvs.erase(fvs.begin() + rindex);
+    // for (const Node& gv : newVars)
+    // {
+    //   auto it = std::lower_bound(fvs.begin(), fvs.end(), gv);
+    //   fvs.insert(it, gv);
+    // }
+    // Trace("ccgen-debug") << "...free variables now " << fvs << std::endl;
+
+    // cur is now a candidate term.  Recalling the description we had provided
+    // earlier: we have reached cur during a random walk that started at v.
+    // Therefore we should record cur in grecs.  (Recall also that grecs is a
+    // reference to the vector that stores the vertices that we know are
+    // reachable from v.)
     grecs.emplace_back(cur);
+
+    // We must also record cur in our index of expansions.
+    addGeneralizationTerm(cur, v, i, fvs);
+
+    // If there are no variables to expand we bring our random walk to a halt.
     if (fvs.empty())
     {
       break;
     }
-    // new index
+    
+    // We will expand fvs[rindex] in the next iteration of this loop.
     rindex = Random::getRandom().pick(0, fvs.size() - 1);
   }
 }
