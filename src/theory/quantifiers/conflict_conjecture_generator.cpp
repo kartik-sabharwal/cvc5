@@ -187,6 +187,11 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
                          << std::endl;
     d_qim.addPendingLemma(lem,
                           InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
+
+    // DO WE NEED TO ADD A PHASE REQUIREMENT HERE?  LET'S MAKE SURE WE DO IT SO
+    // THAT WE TRY TO PROVE THE CONJECTURE BY INDUCTION. Look at the enumerative
+    // conjecture generator for instructions.
+    
     d_conjGenIndex = d_conjGenIndex.get() + 1;
   }
   Trace("cconj") << "ConflictConjectureGenerator: end check" << std::endl;
@@ -902,6 +907,46 @@ void ConflictConjectureGenerator::findCompatible(
     ConflictConjectureGenerator::State state,
     size_t fvindex)
 {
+  // g.  The target expansion of the right-hand side.
+
+  // fvs.  The set of free variables on the right-hand side.
+
+  // vlhs.  The root variable of the left-hand side.
+
+  // gt.  The current child in the generalization trie.
+
+  // state.  We want to find an expansion of vlhs that is at location w where
+  // fvs `state` w.  So either fvs is a subset of w or fvs is a superset of w
+  // or the relation between the two is unknown.
+
+  // fvindex.  Which variable in fvs are we looking at?  The current w probably
+  // covers all variables in fvs that occur before this index.
+
+  // Note.  All paths in the trie must be sorted variable sequences.
+  //
+  // Want LHS expansion e_l whose free variable set is either a proper subset or
+  // an improper superset of the free variable set of the RHS expansion.
+  // Suppose the sorted free variable sequence of the RHS expansion is (v ::
+  // vs).  Our cursor starts at v and we may visualize this as (_v_ :: vs).  At
+  // this point we have three choices.
+  //
+  // Choice 1.  Move the cursor forward/rightward without descending the trie
+  // thereby committing to FV(e_l) being a proper subset of FV(e_r).
+  //
+  // Choice 2.  Move the cursor forward and descend down the branch labeled v
+  // remaining uncommitted.
+  //
+  // Choice 3.  Move the cursor forward and descend down the branch labeled
+  // v' =/= v and committing to FV(e_l) being a proper superset of FV(e_r).
+  //
+  // If we've committed to FV(e_l) being a proper subset of FV(e_r) choice 3.
+  // On the other hand if we've committed to FV(e_l) being a superset of FV(e_r)
+  // then choice 1 is not allowed.  Note that whatever we choose the cursor
+  // moves forward.  Once the cursor is at the end of the free variable
+  // sequence, in other words if it's past the final element, we can add all the
+  // LHS expansions at our current location in the trie to the collection of
+  // compatible expansions.
+  
   if (state != State::SUBSET || fvindex == fvs.size())
   {
     for (const std::pair<Node, Node>& cg : gt->d_gens)
