@@ -1258,6 +1258,39 @@ bool ConflictConjectureGenerator::filterConjecture(const Node& clem)
 
 bool ConflictConjectureGenerator::filterEmatching(const Node& a, const Node& b)
 {
+  // Both a and b are expansions.  (Recall that all expansions are
+  // built from user-declared function symbols, constructor symbols,
+  // and equivalence class variables.)  We assume that a is the
+  // left-hand side of a candidate equality conjecture while b is its
+  // right-hand side.  We also assume that every equivalence class
+  // variable that occurs in b also occurs in a, and that X is the set
+  // of equivalence class variables that occur in a.  We want to check
+  // whether the following conjecture evaluates to false on some
+  // subset of terms from the term database.
+  //
+  // forall X. a = b
+  //
+  // Since a contains equivalence class variables it can be treated as
+  // a pattern for e-matching.  For each equivalence class
+  // representative r, we scan r's equivalence class for terms t that
+  // match the pattern a.  In other words we search for substitutions
+  // T over X such that a*T is equivalent to r.  (Since X subsumes the
+  // equivalence class variables of b we can be sure that b*T is also
+  // a ground term.)  Then we check whether a*T and b*T are in the
+  // same equivalence class.  If there is at least one T for which a*T
+  // and b*T are not equivalent we return true to signal that the
+  // aforementioned conjecture should be discarded.
+
+  // Is this check unnecessarily aggressive?  Consider these
+  // 'identity' conjectures.
+  //
+  // - forall n. n == plus(n, zero())
+  // - forall n. n == times(n, succ(zero()))
+  //
+  // These are perfectly good conjectures if we assume plus and times
+  // are defined the usual way on the natural numbers.  However this
+  // check will cause them to be discarded right away.  **I should
+  // probably remove it.**
   if (!a.hasOperator())
   {
     // we don't expect this to happen, but in case it does we given an
@@ -1265,11 +1298,18 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& a, const Node& b)
     Assert(false);
     return false;
   }
+
   // TODO: cache E-matching for a, for checking a = b1 and a = b2
+
   Node op = a.getOperator();
   TermDb* tdb = getTermDatabase();
   EntailmentCheck* ec = d_treg.getEntailmentCheck();
+
+  // We'll collect the equivalence class representatives of the same
+  // type as 'a' in this vector.
   std::vector<Node> reps;
+
+  // The loop below populates reps.
   eq::EqClassesIterator eqcs = eq::EqClassesIterator(d_ee);
   while (!eqcs.isFinished())
   {
@@ -1280,22 +1320,75 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& a, const Node& b)
       reps.push_back(r);
     }
   }
-  size_t confirmed = 0;
+
+  // We will use tested to count the number of substitutions T found
+  // so far such that a*T and b*T are ground.  
   size_t tested = 0;
+  
+  // We will use confirmed to count the number of substitutions T
+  // found so far such that a*T and b*T are ground and are also in the
+  // same equivalence class.  It should be clear that confirmed <=
+  // tested.
+  size_t confirmed = 0;
+
+  // We iterate through all the equivalence class representatives that
+  // share a's type.
   for (const Node& r : reps)
   {
     Trace("cconj-filter-debug") << "- look in " << r << std::endl;
+
+    // match is the substitution that we build as we perform
+    // e-matching.  When we match an equivalence class variable with a
+    // ground term we add a new mapping to match.  When we must
+    // backtrack we remove a mapping from match.
     Subs match;
-    // filter based on E-matching and test
+
+    // Note that our objective is to search the equivalence class of r
+    // for a term that matches the pattern 'a' yielding a substitution
+    // T such that a*T and b*T are not in the same equivalence class.
+    // We perform backtracking search to find such a substitution.
+    // Now it is clear that if 'a' is a variable or if it is
+    // variable-free then no backtracking is necessary.  However if
+    // 'a' is an operator application that contains a variable as a
+    // proper subterm then we need to search through all the terms in
+    // the equivalence class of r.  Furthermore suppose 'a' has the
+    // form f(a_1, ..., a_n) and r contains the term f(t_1, ..., t_n).
+    // To check whether the latter term matches the former pattern we
+    // need to perform n-many additional searches (one for each
+    // child).  Given that this function, filterEmatching(), performs
+    // 'nested' backtracking searches it stores its continuations as a
+    // stack of EMatchFrame instances.  An EMatchFrame instance stores
+    // the pattern we want to match against, a vector of terms in a
+    // particular equivalence class that might match the pattern, and
+    // our position within this vector.
     std::vector<std::shared_ptr<EMatchFrame>> emf;
-    emf.emplace_back(std::make_shared<EMatchFrame>(tdb, d_ee, a, r));
+
+    // emf[eindex - 1] stores the next e-matching 'job'.  The job is
+    // 'run' by calling emf[eindex - 1]->push().  If it succeeds,
+    // e-matching jobs for each child are pushed on to emf and eindex
+    // is bumped up by 1.  Even if no child jobs were pushed emf is
+    // still bumped.  So if (eindex - 1) is equal to emf.size() we
+    // know that a grounding substitution for 'a' has been found.
+    // However if the job fails then we're forced to backtrack.  We
+    // decrement eindex by 1 and remove any 'future' jobs from emf by
+    // resizing it to the updated value of eindex.
     size_t eindex = 1;
+    
+    // Our first job is of course to find a term from the equivalence
+    // class of representative r that matches the pattern 'a'.
+    emf.emplace_back(std::make_shared<EMatchFrame>(tdb, d_ee, a, r));
+
+    // We iterate through this loop so long as the job stack is
+    // non-empty.
     do
     {
       Assert(0 < eindex);
+
       Trace("cconj-filter-debug")
           << "match at " << eindex << ", " << emf.size() << std::endl;
+
       Assert(eindex <= emf.size() + 1);
+
       if (eindex == emf.size() + 1)
       {
         Trace("cconj-filter-debug")
@@ -1330,8 +1423,11 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& a, const Node& b)
       {
         emf[eindex - 1]->pop(match);
       }
+
       eindex--;
+
       emf.resize(eindex);
+
       if (!emf.empty())
       {
         emf[eindex - 1]->pop(match);
