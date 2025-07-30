@@ -1293,8 +1293,8 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& a, const Node& b)
   // probably remove it.**
   if (!a.hasOperator())
   {
-    // we don't expect this to happen, but in case it does we given an
-    // assertion failure
+    // We don't expect this to happen, but in case it does we given an
+    // assertion failure.
     Assert(false);
     return false;
   }
@@ -1413,6 +1413,11 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& a, const Node& b)
           tested++;
           confirmed = confirmed + (r == rr ? 1 : 0);
         }
+        eindex--;
+      }
+      else if (emf[eindex - 1]->isFinished())
+      {
+        eindex--;
       }
       else if (emf[eindex - 1]->push(tdb, d_ee, match, emf))
       {
@@ -1423,8 +1428,6 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& a, const Node& b)
       {
         emf[eindex - 1]->pop(match);
       }
-
-      eindex--;
 
       emf.resize(eindex);
 
