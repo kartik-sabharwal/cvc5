@@ -337,6 +337,116 @@ class ConflictConjectureGenerator : public QuantifiersModule
   const std::unordered_set<Node> collectRecursivelyDefinedFunctionSymbols(quantifiers::FirstOrderModel* mdl);
 };
 
+/**
+ * This class represents a decision point in the search for a
+ * substitution under which a given pattern is in the equivalence
+ * class of a given equivalence class representative.  Each instance
+ * of this class is implicitly associated with an equivalence class
+ * and the real 'decision' here is which member of that equivalence
+ * class contributes to the matching substitution.  When we backtrack
+ * we need to try the term with the next index into that equivalence
+ * class.  If we've exhausted all the elements in that equivalence
+ * class then the match fails.
+ */
+class Decision;
+
+/**
+ * A `Trail` is a stack of `Decision` instances.  It can also be
+ * viewed as a queue of jobs.
+ */
+typedef std::vector<Decision> Trail;
+
+class Decision
+{
+  private:
+   /**
+    * The pattern we want to find a substitution for.
+    */
+    Node d_pat;
+    /**
+     * The members of the equivalence class associated with this
+     * instance that are shortlisted as potential matches for the
+     * pattern (`d_pat`).
+     */
+    std::vector<Node> d_cands;
+    /**
+     * Index into `d_cands` that represents the next member of the
+     * equivalence to try matching against `d_pat`.  It starts at 0.
+     */
+    size_t d_next;
+    /**
+     * The indices into `d_pat` that are themselves non-variable
+     * patterns, in that they contain nodes that are treated as
+     * matchable variables but are not variables themselves.
+     */
+    std::vector<size_t> d_rec_args;
+    /**
+     * The indices into `d_pat` that are matchable variables.
+     */
+    std::vector<size_t> d_var_args;
+    /**
+     * The indices into `d_pat` that represent the variables mapped to
+     * ground terms by this decision.  Its elements are necessarily a
+     * subset of the elements of `d_var_args`.  It represents the result
+     * of a successful or unsuccessful match of `d_pat` with
+     * `d_cands[d_next - 1]`.  When `d_next` is 0, this
+     * vector is empty.  It is populated in each call to
+     * `this->d_push()` and cleared at the end of each call to
+     * `this->d_pop()`.
+     */
+    std::unordered_set<size_t> d_bound;
+
+   public:
+    /**
+     * An instance of this class represents our intent to find a
+     * substitution, let's call it 'subs', such that the current
+     * equality engine `ee` entails that `subs` applied to `pat` is in
+     * the equivalence class represented by `rep`.  The class is named
+     * 'Decision' because we construct each candidate for `subs` by
+     * matching a concrete member of the equivalence class of `rep`
+     * with `pat`, and we need to *decide* what this concrete member
+     * should be.  cvc5 imposes a total order on the members of each
+     * equivalence class, so in practice we simply iterate through
+     * these members until we find a suitable substitution.  This
+     * constructor sets up the matching task in the following manner.
+     * It sets `d_next` to 0.  For every member of `rep` that has the
+     * same function symbol as `pat`, has the same number of arguments
+     * as `pat`, and agrees with `pat` on all ground terms.
+     */
+    Decision(eq::EqualityEngine& ee, const Node& pat, const Node& rep);
+    /**
+     * Try to grow `substn` by matching `d_pat` (the pattern) with
+     * `d_cand[d_next]` (the next candidate).  Assume `d_bound` is
+     * empty.  The constructor has already ensured that all the terms
+     * in `d_cands` agree with `d_pat` on ground (variable-free)
+     * children.  `push()` (this function) attempts to grow the
+     * substitution `subs` with mappings for all variables `d_pat[i]`
+     * where i is in `d_var_args`.  The remaining children of `d_pat`
+     * are non-variable patterns.  `push()` is implemented such that
+     * it doesn't perform any recursion itself and instead adds
+     * `Decision` instances for the sub-patterns, i.e. children of
+     * `d_pat` that are themselves non-variable patterns, on to the
+     * trail `decs`.  Returns true if matching succeeded and false
+     * otherwise.  To be conservative we assume that even failed
+     * attempts might change `subs` and `d_bound` and will eventually
+     * need to be undone with `pop()`.
+     */
+    bool push(eq::EqualityEngine& ee, Subs& subs, Trail& decs);
+    /**
+     * This function undoes the work of a previous call to `push()` on
+     * the substitution `subs`.  It loops over elements i in
+     * `d_bound`, where we know each `d_pat[i]` is a variable, and
+     * removes the mapping for `d_pat[i]` from `subs`.
+     */
+    void pop(Subs& subs);
+    /**
+     * Returns `true` if all matching candidates have been exhausted
+     * and returns `false` otherwise.
+     */
+    bool isFinished() const;
+};
+
+
 }  // namespace quantifiers
 }  // namespace theory
 }  // namespace cvc5::internal
