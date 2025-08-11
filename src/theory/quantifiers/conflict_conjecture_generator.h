@@ -176,21 +176,26 @@ class ConflictConjectureGenerator : public QuantifiersModule
   {
    public:
     /**
-     * We know that the function getGeneralizationsInternal() accepts an
-     * equivalence class variable and computes a number of its expansions.  Let
-     * x be some equivalence class variable, let t be an expansion of x
-     * discovered by getGeneralizationsInternal(), and let fvs be some
-     * arrangement of the equivalence class variables of t (the exact
-     * arrangement depends on how t was derived from x).  Since fvs is a
-     * sequence of variables let's write it as v_1, ..., v_n where n >= 0.  The
-     * function addGeneralizationTerm() accepts t, x, and fvs and inserts the
+     * We know that the function getGeneralizationsInternal() accepts
+     * an equivalence class variable and computes a number of its
+     * expansions.  Let x be some equivalence class variable, let t be
+     * an expansion of x discovered by getGeneralizationsInternal(),
+     * and let fvs be some arrangement of the equivalence class
+     * variables of t (the exact arrangement depends on how t was
+     * derived from x).  Since fvs is a sequence of variables let's
+     * write it as v_1, ..., v_n where n >= 0.  The function
+     * addGeneralizationTerm() accepts t, x, and fvs and inserts the
      * pair (t, x) into d_gtrie such that
      *
-     * d_gtrie.d_children[v_1].(...).d_children[v_n].d_gens is guaranteed to
-     * contain the pair (t, x) 
+     * d_gtrie.d_children[v_1].(...).d_children[v_n].d_gens is
+     * guaranteed to contain the pair (t, x)
      *
-     * Observe that fvs is the 'path' to (t, x) in d_gtrie.  In order to
-     * remember this path, addGeneralizationTerm() maps t to fvs in d_genToFv.
+     * Observe that fvs is the 'path' to (t, x) in d_gtrie.  In order
+     * to remember this path, addGeneralizationTerm() maps t to fvs in
+     * d_genToFv.
+     *
+     * TODO.  Should `fvs` be in sorted order so that
+     * `findCompatible()` can do its job correctly?
      */
     std::map<Node, GenTrie> d_children;
     std::vector<std::pair<Node, Node>> d_gens;
@@ -305,6 +310,8 @@ class ConflictConjectureGenerator : public QuantifiersModule
    */
   bool filterEmatching(const Node& a, const Node& b);
 
+  bool filterEmatchingOld(const Node& a, const Node& b);
+
   /**
    * Calls a subsolver to check whether the proposed conjecture is a deductive
    * consequence of lemmas that have already been proved.  No induction or
@@ -413,7 +420,7 @@ class Decision
      * same function symbol as `pat`, has the same number of arguments
      * as `pat`, and agrees with `pat` on all ground terms.
      */
-    Decision(eq::EqualityEngine& ee, const Node& pat, const Node& rep);
+    Decision(TermDb* term_db, eq::EqualityEngine* ee, const Node& pat, const Node& rep);
     /**
      * Try to grow `substn` by matching `d_pat` (the pattern) with
      * `d_cand[d_next]` (the next candidate).  Assume `d_bound` is
@@ -431,7 +438,7 @@ class Decision
      * attempts might change `subs` and `d_bound` and will eventually
      * need to be undone with `pop()`.
      */
-    bool push(eq::EqualityEngine& ee, Subs& subs, Trail& decs);
+    bool push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& decs);
     /**
      * This function undoes the work of a previous call to `push()` on
      * the substitution `subs`.  It loops over elements i in

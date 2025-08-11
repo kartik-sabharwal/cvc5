@@ -915,37 +915,44 @@ void ConflictConjectureGenerator::findCompatible(
 
   // gt.  The current child in the generalization trie.
 
-  // state.  We want to find an expansion of vlhs that is at location w where
-  // fvs `state` w.  So either fvs is a subset of w or fvs is a superset of w
-  // or the relation between the two is unknown.
+  // state.  We want to find an expansion of vlhs that is at location
+  // w where fvs `state` w.  So either fvs is a subset of w or fvs is
+  // a superset of w or the relation between the two is unknown.
 
-  // fvindex.  Which variable in fvs are we looking at?  The current w probably
-  // covers all variables in fvs that occur before this index.
+  // fvindex.  Which variable in fvs are we looking at?  The current w
+  // probably covers all variables in fvs that occur before this
+  // index.
 
   // Note.  All paths in the trie must be sorted variable sequences.
   //
-  // Want LHS expansion e_l whose free variable set is either a proper subset or
-  // an improper superset of the free variable set of the RHS expansion.
-  // Suppose the sorted free variable sequence of the RHS expansion is (v ::
-  // vs).  Our cursor starts at v and we may visualize this as (_v_ :: vs).  At
-  // this point we have three choices.
+  // Want LHS expansion e_l whose free variable set is either a proper
+  // subset (<) or an improper superset (>=) of the free variable set
+  // of the RHS expansion.  Suppose the sorted free variable sequence
+  // of the RHS expansion is (v :: vs).  Our cursor starts at v and we
+  // may visualize this as (_v_ :: vs).  At this point we have three
+  // choices.
   //
-  // Choice 1.  Move the cursor forward/rightward without descending the trie
-  // thereby committing to FV(e_l) being a proper subset of FV(e_r).
+  // Choice 1.  Move the cursor forward/rightward without descending
+  // the trie thereby committing to FV(e_l) being a proper subset of
+  // FV(e_r).
   //
-  // Choice 2.  Move the cursor forward and descend down the branch labeled v
-  // remaining uncommitted.
+  // Choice 2.  Move the cursor forward and descend down the branch
+  // labeled v remaining uncommitted.
   //
-  // Choice 3.  Move the cursor forward and descend down the branch labeled
-  // v' =/= v and committing to FV(e_l) being a proper superset of FV(e_r).
+  // Choice 3.  Move the cursor forward and descend down a branch
+  // labeled v', where v' is distinct from v, committing to FV(e_l)
+  // being a proper superset of FV(e_r).
   //
-  // If we've committed to FV(e_l) being a proper subset of FV(e_r) choice 3.
-  // On the other hand if we've committed to FV(e_l) being a superset of FV(e_r)
-  // then choice 1 is not allowed.  Note that whatever we choose the cursor
-  // moves forward.  Once the cursor is at the end of the free variable
-  // sequence, in other words if it's past the final element, we can add all the
-  // LHS expansions at our current location in the trie to the collection of
-  // compatible expansions.
+  // If we've committed to FV(e_l) being a proper subset of FV(e_r)
+  // then choice 3 is no longer allowed.  On the other hand if we've
+  // committed to FV(e_l) being a superset of FV(e_r) then choice 1 is
+  // not allowed.  Note that no matter what choice we make, the cursor
+  // moves forward.  Once the cursor is at the end of the free
+  // variable sequence, in other words once the entire sequence has
+  // been processed, we can add all the LHS expansions at our current
+  // location in the trie to the collection of compatible expansions.
+
+  // This function 
   
   if (state != State::SUBSET || fvindex == fvs.size())
   {
@@ -1256,7 +1263,245 @@ bool ConflictConjectureGenerator::filterConjecture(const Node& clem)
   return false;
 }
 
-bool ConflictConjectureGenerator::filterEmatching(const Node& a, const Node& b)
+bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& rhs)
+{
+  // Both `lhs` and `rhs` are expansions.  (Recall that all expansions
+  // are built from user-declared function symbols, constructor
+  // symbols, and equivalence class variables.)  We assume that `lhs`
+  // is the left-hand side of a candidate equality conjecture while
+  // `rhs` is its right-hand side.  We also assume that every
+  // equivalence class variable that occurs in `rhs` also occurs in
+  // `lhs`.  Let 'X' be the set of equivalence class variables that
+  // occur in `lhs`.  We want to check whether the following
+  // conjecture evaluates to false on some substitution of terms from
+  // the term database.
+  //
+  // forall X. lhs = rhs
+  //
+  // Since `lhs` contains equivalence class variables it can be
+  // treated as a pattern for e-matching.  For each equivalence class
+  // representative `rep`, we scan `rep`'s equivalence class for terms
+  // `t` that match the pattern `lhs`.  In other words we search for
+  // substitutions `subs` over X such that (`lhs` * `subs`) is
+  // equivalent to `rep`.  (Since X subsumes the equivalence class
+  // variables of `rhs` we can be sure that (`rhs` * `subs`) is also a
+  // ground term.)  Then we check whether (`lhs` * `subs`) and (`rhs`
+  // * `subs`) are in the same equivalence class.  If there is at
+  // least one substitution for which they are in different
+  // equivalence classes, we return true to signal that the candidate
+  // conjecture should be discarded.  We want to test with as many
+  // substitutions as we can.
+
+  // We assume that `lhs` has an operator.  Clearly this assumption
+  // would make us reject the following reasonable conjectures.
+  //
+  // - forall n. n == plus(n, zero())
+  // - forall n. n == times(n, succ(zero()))
+  //
+  // These are perfectly good conjectures if we assume plus and times
+  // are defined the usual way on the natural numbers.  So in addition
+  // to making sure that the variables of `lhs` subsume the variables
+  // of `rhs`, let's also make sure that `lhs` has an operator.
+  if (!lhs.hasOperator())
+  {
+    return false;
+  }
+  const Node& op = lhs.getOperator();
+
+  // We'll need to pass a pointer to the current term database when we
+  // call the member functions of `Decision`.
+  TermDb* term_db = getTermDatabase();
+
+  // A pointer to the current entailment checker will help us check
+  // whether `lhs` and `rhs` are entailed to be equal under the
+  // substitutions we'll discover.
+  EntailmentCheck* ent_chk = d_treg.getEntailmentCheck();
+
+  // `good_reps` will store the 'good' equivalence class
+  // representatives.  These are representatives that are 'constant'
+  // in the sense of `isConst()` and also have the same sort as `lhs`.
+  std::vector<Node> good_reps;
+
+  // Populate `good_reps` in the loop below.
+
+  // 'rep_it' is short for 'iterator over representatives'.
+  eq::EqClassesIterator rep_it = eq::EqClassesIterator(d_ee);
+  while (!rep_it.isFinished())
+  {
+    // 'rep' is short for 'representative'.
+    const Node& rep = *rep_it;
+
+    ++rep_it;
+
+    if (rep.isConst() && rep.getType() == lhs.getType())
+    {
+      good_reps.push_back(rep);
+    }
+  }
+
+  // We will use tested to count the number of substitutions 'subs'
+  // found so far such that (`lhs` * subs) and (`rhs` * subs) are
+  // ground.
+  size_t tested = 0;
+  
+  // We will use tested to count the number of substitutions 'subs'
+  // found so far such that (`lhs` * subs) and (`rhs` * subs) are
+  // ground and are also in the same equivalence class.  It should be
+  // clear that `confirmed` <= `tested`.
+  size_t confirmed = 0;
+
+  for (const Node& rep : good_reps)
+  {
+    // Start with the empty substitution.
+    Subs subs;
+
+    // Create the queue of decision points, `trail`, where each
+    // decision point is represented by an instance of the `Decision`
+    // class.  This queue is slightly strange because it is
+    // implemented by combining a vector, `decs`, with an index,
+    // `lvl`, that tracks the front element of the queue.  Elements
+    // are added to the queue by pushing them on to the end of the
+    // vector.  Elements can be 'removed' in two ways.  They can be
+    // popped from the vector, which corresponds to removing elements
+    // from the end of the queue.  Furthermore the index of the
+    // element at the front of the queue can be incremented, which
+    // corresponds to dequeuing elements in the expected FIFO fashion.
+    // Any element dequeued in the latter manner can be restored by
+    // decrementing the same index.
+    Trail decs{};
+
+    // Add the first decision point to the queue.
+    decs.emplace_back(d_ee, lhs, rep);
+
+    // `lvl`, short for 'decision level', is the index that represents
+    // the front of the queue whose elements are stored in `decs`.
+    // We'll bump it as we proceed and decrement it when we need to
+    // backtrack.
+    size_t lvl = 0;
+
+    // Before we look at the code for the loop let's make sure that we
+    // clearly state our two invariants.
+    //
+    // 1.  `decs.size()` >= `lvl` >= 0.
+    // 
+    // 2.  We work to maintain the invariant that at the beginning of
+    // an iteration if `lvl` >= 0 then `decs[lvl]` has *effectively*
+    // not contributed to the current substitution.  In other words if
+    // `decs[lvl].push()` had been called in the past, then any
+    // mappings it added to the substitution have since been removed
+    // with `decs[lvl].pop()`.  As a consequence, if `lvl` > 0 then
+    // the most recent call to `push()` was effectively `decs[lvl -
+    // 1].push()`.
+
+    // Let's also be clear that we leave the loop when backtracking is
+    // impossible, which happens when `decs.size()` is 0.  Even if the
+    // queue is considered 'empty' due to `lvl` = `decs.size()` we
+    // still try to backtrack by decrementing `lvl`.  This is because
+    // we want to find as many grounding substitutions as possible,
+    // instead of just one.
+
+    // We will set this to `false` when it's time to leave the loop.
+    bool go_on = true;
+    while (go_on)
+    {
+      // Our actions in each iteration of the loop are governed by the
+      // answers to three questions.  Is the front index `lvl` within
+      // the bounds of the vector `decs`?  If it is, are there still
+      // terms to explore in the e-matching job at that index?  If
+      // there are, can we execute the e-matching job at the index
+      // successfully?  This suggests that there are four distinct
+      // situations to handle.  They are labeled 'Situation 1' through
+      // 'Situation 4' in the code below.
+
+      // Note.  The index into `decs` that denotes the back element of
+      // the decision queue is (`decs.size()` - 1).  When `lvl`
+      // exceeds `max_lvl` we can claim that there are no more
+      // decisions to be made.  This means that we have found a
+      // substitution and also that once we test this substitution we
+      // should backtrack so that we can find more substitutions.
+      const size_t max_lvl = decs.size() - 1;
+
+      if (lvl > max_lvl)
+      {
+        // Situation 1.  `lvl` is not a valid index into `decs`.
+        // There are no pending decisions.  This means we have found a
+        // substitution `subs` such that `lhs` under `subs` is in a
+        // known equivalence class.
+
+        // We should print the substitution.
+        std::cout << "Found grounding substitution: " << subs << std::endl;
+
+        // We need to backtrack so that we can find more grounding
+        // substitutions.
+        if (lvl > 0)
+        {
+          --lvl;
+          decs[lvl].pop(subs);
+        }
+        else
+        {
+          // `lvl` is 0 so backtracking is impossible.
+          go_on = false;
+        }
+      }
+      else
+      {
+        Decision& dec = decs[lvl];
+
+        if (dec.isFinished())
+        {
+          // Situation 2.  `lvl` is a valid index into `decs` but
+          // `dec` has no more candidate terms.
+
+          // We need to backtrack.
+          if (lvl > 0)
+          {
+            // The subsequent decisions in `decs`, the ones at index
+            // (`lvl` + 1) and up, were pushed with the expectation
+            // that `decs[lvl]` would succeed.  Since `decs[lvl]`
+            // can't possibly succeed (which is why we're
+            // backtracking), all subsequent decisions, i.e. those at
+            // index `lvl` and up, need to be removed.
+            decs.resize(lvl);
+
+            // Thanks to our invariant we have that the last `push()`
+            // that was performed was effectively `decs[lvl -
+            // 1].push()`, and that's what we need to undo with `pop()`.
+            decs[lvl - 1].pop(subs);
+
+            // At the moment `lvl` is not a legal index into `decs`.
+            // We set it to the maximum legal index, which is (`lvl` -
+            // 1).  We can achieve this with a decrement.
+            --lvl;
+          }
+          else
+          {
+            go_on = false;
+          }
+        }
+        else if (dec.push(term_db, d_ee, subs, decs))
+        {
+          // Situation 3.  In this case we simply increment `lvl` and
+          // proceed to the next iteration.
+          ++lvl;
+        }
+        else
+        {
+          // Situation 4.  `lvl` is a valid index into `decs`, `decs[lvl]` is
+          // not finished, but `decs[lvl].push()` is unsuccessful.  Even an
+          // unsuccessful `push()` can destructively modify `subs` so we run
+          // `decs[lvl].pop()` to restore the invariant.
+
+          dec.pop(subs);
+        }
+      }
+    }    
+  }
+
+  return false;
+}
+
+bool ConflictConjectureGenerator::filterEmatchingOld(const Node& a, const Node& b)
 {
   // Both a and b are expansions.  (Recall that all expansions are
   // built from user-declared function symbols, constructor symbols,
@@ -2076,6 +2321,237 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
   Trace("ccgen-filter-eval") << "all equal!" << std::endl << std::endl;
   
   return false;
+}
+
+Decision::Decision(TermDb* term_db, eq::EqualityEngine* ee, const Node& pat, const Node& rep)
+{
+  // We assume that `pat` is not itself a variable.  This means it's
+  // an application of a function-like symbol, also called an
+  // operator, which we can retrieve.  Why do we need it?  Because we
+  // want to pre-emptively reject the members of the equivalence class
+  // of `rep` that don't have `op` as their root symbol.
+  const Node& op = pat.getOperator();
+
+  // We want to collect all the variable-free children of `pat` along
+  // with their positions in the following map.  After populating
+  // `ground_args` it will satisfy the property that the pair (i, t)
+  // is in `ground_args` if and only if `pat[i]` is a variable-free
+  // and its representative is `t`.
+  std::map<size_t, Node> ground_args{};
+
+  // The following loop populates `ground_args` as well as the fields
+  // `d_var_args` and `d_rec_args`.
+  const size_t nargs = pat.getNumChildren();
+  for (size_t i = 0; i < nargs; i++)
+  {
+    // The i th child of pat.
+    const Node& c = pat[i];
+
+    if (c.getKind() == Kind::BOUND_VARIABLE)
+    {
+      // `c` is a matchable variable.
+      d_var_args.push_back(i);
+    }
+    else if (!expr::hasBoundVar(c))
+    {
+      // `c` is a term with no matchable variables.
+      ground_args[i] = ee->getRepresentative(c);
+    }
+    else
+    {
+      // `c` is a non-variable term that contains matchable variables.
+      d_rec_args.push_back(i);
+    }
+  }
+
+  // The objective of the following loop is to populate `d_cands` with
+  // members of the equivalence class of `rep` that (1) have `op` as
+  // the root symbol, (2) are active, and (3) agree on all ground
+  // terms.
+
+  // TODO.  I need to understand what 'active' means in this context.
+  // According to Andy the restriction to active terms "will filter
+  // terms that are congruent to another term we have already
+  // considered."
+
+  // The name 'mem_it' is short for 'iterator over members of
+  // equivalence class'.
+  eq::EqClassIterator mem_it = eq::EqClassIterator(rep, ee);
+  while (!mem_it.isFinished())
+  {
+    // 'mem' is short for 'member of equivalence class'.
+    const Node& mem = *mem_it;
+
+    ++mem_it;
+    
+    if (!mem.hasOperator() || mem.getOperator() != op || !term_db->isTermActive(mem))
+    {
+      // If we're here then `mem` violates one of conditions (1) or
+      // (2).  There's no point adding it to `d_cands`.
+      continue;
+    }
+
+    // The following loop checks condition (3).  If `accept` is true
+    // when we break out of the loop we'll add `mem` to `d_cands`.
+    // We'll reject otherwise.
+    bool accept = true;
+
+    // The name 'ent' is short for 'entry'.
+    for (const std::pair<size_t, Node>& ent : ground_args)
+    {
+      // 'i' is short for 'index of ground child of `pat`'.
+      const size_t i = std::get<0>(ent);
+
+      // 'rgp' is short for 'representative of ground child of `pat`'.
+      const Node& rgp = std::get<1>(ent);
+
+      // 'rgm' is short for 'representative of ground child of `mem`'.
+      const Node& rgm = ee->getRepresentative(mem[i]);
+
+      if (rgp != rgm)
+      {
+        // `pat` and `mem` happen to disagree on a ground term.  `mem`
+        // obviously can't match `pat`.
+        accept = false;
+        break;
+      }
+    }
+
+    // Fulfilling our promise about `accept`.
+    if (accept)
+    {
+      d_cands.push_back(mem);
+    }
+  }
+}
+
+bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& decs) 
+{
+  if (isFinished())
+  {
+    // If there are no more members in the equivalence class associated
+    // with this instance that could match `d_pat` then we have to fail.
+    return false;
+  }
+
+  // The variable-free term we're going to match `d_pat` against.  The
+  // name 'cand' is short for 'candidate term'.
+  const Node& cand = d_cands[d_next];
+
+  // `d_next` always stores the index of the *next* candidate term so
+  // we bump it now.
+  d_next++;
+
+  // We add a new mapping to `subs` for each child of `d_pat` that
+  // happens to be a variable.  For each `i` in `d_var_args` we want
+  // to extend `subs` by mapping `d_pat[i]` to term `cand[i]`.
+  for (const size_t i : d_var_args)
+  {
+    // The variable for which we want to add a mapping.  'var' is
+    // short for 'variable'.
+    const Node& var = d_pat[i];
+
+    // The term to which `var` is mapped in `subs`.  If `var` is
+    // unmapped then `cur` is `Node::null()`.  'cur' is short for
+    // 'current mapping'.
+    const Node& cur = subs.getSubs(var);
+
+    if (cur.isNull())
+    {
+      // `var` does not have a mapping in `subs`.  We can map `var` to
+      // `cand[i]` without a second thought.  We should also update
+      // `d_bound`.  If we need to backtrack `subs`, `pop()` will
+      // remove exactly the variables at indices `d_bound`.
+      subs.add(var, cand[i]);
+      d_bound.insert(i);
+    }
+    else
+    {
+      // `var` is already mapped to `cur` in `subs`.  If `cur` and
+      // `cand[i]` are equivalent, we don't need to do any work.  If
+      // they are not equivalent then matching has failed, so we must
+      // return `false`.
+      if (ee->areEqual(cur, cand[i]))
+      {
+        continue;
+      }
+      else
+      {
+        // We will not backtrack yet.  Instead we'll leave it up to the
+        // caller, `filterEmatching()`, to call `pop()` after we return
+        // `false`.
+        return false;
+      }
+    }
+  }
+
+  // Remember that e-matching is a recursive process.  This function,
+  // `push()`, isn't recursive.  Instead it queues fresh e-matching
+  // jobs on to `decs` in the form of fresh `Decision` instances.
+  // Each child of `d_pat` that is a non-variable pattern is one of
+  // the two pieces of data needed to create such an instance of
+  // `Decision`.  The second piece is the equivalence class
+  // representative of the corresponding child of `cand`.  We will
+  // collect these representatives in the vector `reps_rec` below.
+  // The name 'reps_rec' is short for 'representatives for recursive
+  // calls'.
+  //
+  // Here's a another attempt to explain the logic.  Since `d_pat[i]`
+  // is an operator application that contains a variable as a proper
+  // subterm we need to search through all the terms in `rep`, the
+  // equivalence class of `cand[i]`.  `d_pat[i]` has the form f(a_1,
+  // ..., a_n) and `rep` contains the term f(t_1, ..., t_n).  To check
+  // whether the latter term matches the former pattern we need to
+  // perform at most n-many additional searches, one for each child
+  // that is a non-variable pattern.
+  std::vector<Node> reps_rec{};
+  
+  for (const size_t i : d_rec_args)
+  {
+    // 'rep' is short for 'representative'.
+    const Node& rep = ee->getRepresentative(cand[i]);
+
+    // TODO.  The following criterion is taken from Andy's code.  I
+    // don't know why he's checking this.  I should ask why
+    // `isConst()` is important.
+    if (!rep.isConst())
+    {
+      return false;
+    }
+    
+    reps_rec.emplace_back(rep);
+  }
+
+  // Let's actually construct and queue up the recursive jobs, which
+  // are represented by instances of `Decision`.
+
+  // 'n_rec_args' is short for 'number of arguments for recursive calls'.
+  const size_t n_rec_args = d_rec_args.size();
+  for (size_t i = 0; i < n_rec_args; i++)
+  {
+    decs.emplace_back(Decision(term_db, ee, d_pat[d_rec_args[i]], reps_rec[i]));
+  }
+
+  return true;
+}
+
+void Decision::pop(Subs& subs)
+{
+  // Read description in header file.
+  
+  for (const size_t i : d_bound)
+  {
+    subs.erase(d_pat[i]);
+  }
+
+  d_bound.clear();
+}
+
+bool Decision::isFinished() const
+{
+  // Read description in header file.
+
+  return d_next == d_cands.size();
 }
 
 }  // namespace quantifiers
