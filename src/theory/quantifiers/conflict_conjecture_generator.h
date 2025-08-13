@@ -291,7 +291,7 @@ class ConflictConjectureGenerator : public QuantifiersModule
                       const std::vector<Node>& tgt_vars,
                       const Node& rt_var,
                       const GenTrie* cur,
-                      std::vector<Node>& cur_vars,
+                      const std::vector<Node> cur_vars,
                       const size_t n_inter,
                       const State st);
 

@@ -486,7 +486,7 @@ void ConflictConjectureGenerator::checkDisequality(const Node& eq)
     const std::vector<Node>& gfvs = d_genToFv[g];
     Trace("ccgen-debug") << "  - " << g << std::endl;
     State s = gfvs.empty() ? State::SUBSET : State::UNKNOWN;
-    findCompatible(g, gfvs, vars[0], &d_gtrie, s, 0);
+    findCompatible(g, gfvs, vars[0], &d_gtrie, std::vector<Node>{}, 0, State::SUBSET);
   }
 
   // go back and see if the conjectures should be filtered
@@ -961,7 +961,7 @@ void ConflictConjectureGenerator::findCompatible(
     const std::vector<Node>& tgt_vars,
     const Node& rt_var,
     const GenTrie* cur,
-    std::vector<Node>& cur_vars,
+    const std::vector<Node> cur_vars,
     const size_t n_inter,
     const ConflictConjectureGenerator::State st)
 {
@@ -1035,140 +1035,115 @@ void ConflictConjectureGenerator::findCompatible(
 
   // *Strategy*
   //
-  // 
+  // We will start each call to `findCompatible()` by checking whether
+  // `cur_vars` is a subset of `tgt_vars` or vice versa.  If so, we
+  // will rifle through the expansion-variable pairs (`exp`, `var`) at
+  // `*cur`.  For each pair where `var` is equal to `rt_var`, we can
+  // be sure that `exp` is an expansion derived from `rt_var` that is
+  // compatible with `tgt_exp`.  With this surety we can call
+  // `candidateConjecture()` to indicate that one, not both, of `exp =
+  // tgt_exp` or `tgt_exp = exp` should be considered a candidate
+  // conjecture.  To meet the expectation of `candidateConjecture()`
+  // we ensure that the equivalence class variables that occur in its
+  // first argument make a superset of the equivalence class variables
+  // in its second argument.  To say it another way if `cur_vars` is a
+  // subset of `tgt_vars` we will call `candidateConjecture(tgt_exp,
+  // exp)` otherwise we'll flip the order of arguments.
   //
+  // Next, we elect to make one recursive call to `findCompatible()`
+  // for each child of `*cur`.  Recall that the children of `*cur` are
+  // essentially instances `trie` of `GenTrie` each labeled with a
+  // unique equivalence class variable `lbl` (lbl is short for label).
+  // For each trie-label pair we call `findCompatible()` with updated
+  // values for the variables that are changeable.  `tgt_exp`,
+  // `tgt_vars` and `rt_var` are not changeable.  `cur` is updated to
+  // `&trie` while `cur_vars` is updated to include the variable
+  // `lbl`.  If `lbl` occurs in `tgt_vars` then `n_inter` is bumped by
+  // 1 and `st` is left as-is.  On the other hand if `lbl` does not
+  // occur in `tgt_vars` then `n_inter` is left as-is, while `st` is
+  // updated to `SUPERSET`.  Note that the use of 'updated' in the
+  // previous sentences does not imply that `cur_vars` is
+  // destructively modified.  Instead, as the qualifiers on this
+  // function's arguments suggest, we make a fresh vector to pass
+  // along to each recursive call.
   //
-  //
-  //
-  //
-  //
-  //
+  // **TODO**.  At the moment we perform an exhaustive search over the
+  // trie with no restrictions on the choice of `lbl`.  It might be
+  // more pragmatic to have a heuristic that maintains a bound on the
+  // size of the difference between `cur_vars` and `tgt_vars`.  Let's
+  // say we wanted to bound the size of the difference to at most 2
+  // variables.  Then if `st == SUPERSET` and `tgt_vars` has at least
+  // 2 variables that are not in `cur_vars` then we will restrict our
+  // choices of `lbl` to equivalence class variables that occur in
+  // `tgt_vars`.  If `st == SUBSET` we will not restrict our choices
+  // of `lbl`.  Also, even if one of `cur_vars` and `tgt_vars` is a
+  // subset of the other, we will only make candidate conjectures when
+  // the difference between their sizes is less or equal to 2.
 
-  // In any particular recursive call if either `tgt_vars` is a subset
-  // of `curs_vars` (characterized by `state == SUBSET` and `n_covered
-  // == tgt_vars.size()`), or if `tgt_vars` is a superset of
-  // `curs_vars` (characterized by `state == UNKNOWN` or `state ==
-  // SUPERSET`), we can be sure that all the expansions in
-  // `curs->d_gens` are compatible with `tgt_exp`.  However not just
-  // any compatible expansion will do.  We explicitly want compatible
-  // expansions that are derived from `rt_var`.  This is easy to check
-  // because each element of `curs->d_gens` is a pair whose first
-  // component is an expansion and whose second component is that
-  // expansion's root variable.
-  
-  // g.  The target expansion of the right-hand side.
+  // First discover compatible expansions.
 
-  // fvs.  The set of free variables on the right-hand side.
+  // cur_sub_tgt --> is `cur_vars` a subset of `tgt_vars`?
+  const bool cur_sub_tgt = (n_inter == cur_vars.size());
 
-  // vlhs.  The root variable of the left-hand side.
+  // tgt_sub_cur --> is `tgt_vars` a subset of `cur_vars`?
+  const bool tgt_sub_cur = (n_inter == tgt_vars.size());
 
-  // gt.  The current child in the generalization trie.
+  if (cur_sub_tgt || tgt_sub_cur)
+  {
+    for (const std::pair<Node, Node>& entry : cur->d_gens)
+    {
+      // exp --> expansion.  `exp` is compatible with `tgt_exp`.  Set
+      // of equivalence class variables in `exp` is exactly
+      // `cur_vars`.
+      const Node& exp = std::get<0>(entry);
 
-  // state.  We want to find an expansion of vlhs that is at location
-  // w where fvs `state` w.  So either fvs is a subset of w or fvs is
-  // a superset of w or the relation between the two is unknown.
+      // var --> variable.  `exp` is an expansion derived from the
+      // equivalence class variable `var`.
+      const Node& var = std::get<1>(entry);
 
-  // fvindex.  Which variable in fvs are we looking at?  The current w
-  // probably covers all variables in fvs that occur before this
-  // index.
+      if (var == rt_var)
+      {
+        // Remember that `candidateConjecture()` expects the
+        // equivalence class variables that occur in its first
+        // argument to be a superset of the equivalence class
+        // variables that occur in its second argument.
 
-  // THE COMMENT BELOW ISN'T QUITE CORRECT!
-  //
-  // Note.  All paths in the trie must be sorted variable sequences.
-  //
-  // Want LHS expansion e_l whose free variable set is either a proper
-  // subset (<) or an improper superset (>=) of the free variable set
-  // of the RHS expansion.  Suppose the sorted free variable sequence
-  // of the RHS expansion is (v :: vs).  Our cursor starts at v and we
-  // may visualize this as (_v_ :: vs).  At this point we have three
-  // choices.
-  //
-  // Choice 1.  Move the cursor forward/rightward without descending
-  // the trie thereby committing to FV(e_l) being a proper subset of
-  // FV(e_r).
-  //
-  // Choice 2.  Move the cursor forward and descend down the branch
-  // labeled v remaining uncommitted.
-  //
-  // Choice 3.  Move the cursor forward and descend down a branch
-  // labeled v', where v' is distinct from v, committing to FV(e_l)
-  // being a proper superset of FV(e_r).
-  //
-  // If we've committed to FV(e_l) being a proper subset of FV(e_r)
-  // then choice 3 is no longer allowed.  On the other hand if we've
-  // committed to FV(e_l) being a superset of FV(e_r) then choice 1 is
-  // not allowed.  Note that no matter what choice we make, the cursor
-  // moves forward.  Once the cursor is at the end of the free
-  // variable sequence, in other words once the entire sequence has
-  // been processed, we can add all the LHS expansions at our current
-  // location in the trie to the collection of compatible expansions.
+        if (cur_sub_tgt)
+        {
+          candidateConjecture(tgt_exp, exp);
+        }
+        else
+        {
+          // `tgt_sub_cur` must be true.
+          candidateConjecture(exp, tgt_exp);
+        }
+      }
+    }
+  }
 
-  // The following condition checks whether the expansions in the
-  // vector `curs->d_gens` are compatible with `tgt_exp`.
+  // Then make recursive calls.
 
-  // tgt_vars_subset_curs_vars is short for 'is `tgt_vars` a proper
-  // subset of `curs_vars`?'  The first condition (`state` ==
-  // `State::SUBSET`) is true only if we have committed to making
-  // `tgt_vars` a subset of `curs_vars`.  However such commitment does
-  // not mean all variables of `tgt_vars` are actually covered by
-  // `curs_vars`.  That's where the second test comes in.  `n_covered`
-  // counts the size of the intersection of `curs_vars` with
-  // `tgt_vars`.  If its value is `tgt_vars.size()` then all of
-  // `tgt_vars` is undoubtedly covered by `curs_vars`.
-  // const bool tgt_vars_subset_curs_vars = (state == State::SUBSET && n_covered == tgt_vars.size());
+  for (const std::pair<Node, GenTrie> entry : cur->d_children)
+  {
+    const Node& lbl = std::get<0>(entry);
+    const GenTrie& trie = std::get<1>(entry);
 
-  // curs_vars_subset_tgt_vars is short for 'is `curs_vars` a proper subset of `tgt_vars`?'  
-  // const bool curs_vars_subset_tgt_vars = (state == State::UNKNOWN || state == State::SUPERSET);
+    // Will pass `next_vars` in the position of `cur_vars` in each recursive call.
+    std::vector<Node> next_vars{};
+    next_vars.insert(next_vars.end(), cur_vars.begin(), cur_vars.end());
+    next_vars.push_back(lbl);
 
-  // if (tgt_vars_subset_curs_vars || curs_vars_subset_tgt_vars)
-  // {
-  //   // 
-
-  //   for (const std::pair<Node, Node>& cg : gt->d_gens)
-  //   {
-  //     if (cg.second == vlhs)
-  //     {
-  //       if (state == State::SUBSET)
-  //       {
-  //         candidateConjecture(cg.first, g);
-  //       }
-  //       else
-  //       {
-  //         candidateConjecture(g, cg.first);
-  //       }
-  //     }
-  //     else
-  //     {
-  //       Trace("ccgen-debug")
-  //           << "- found term " << cg.first << " but not for lhs " << vlhs
-  //           << " vs " << cg.second << std::endl;
-  //     }
-  //   }
-  // }
-  // Trace("ccgen-debug") << "  findCompatible " << fvindex << "/" << fvs.size()
-  //                      << " state = " << static_cast<int>(state) << std::endl;
-  // Assert(state != State::UNKNOWN || fvindex < fvs.size());
-  // for (std::pair<const Node, GenTrie>& cg : gt->d_children)
-  // {
-  //   if (fvindex < fvs.size() && cg.first == fvs[fvindex])
-  //   {
-  //     Assert(state != State::SUPERSET);
-  //     State newState = fvindex + 1 == fvs.size() ? State::SUBSET : state;
-  //     findCompatible(g, fvs, vlhs, &cg.second, newState, fvindex + 1);
-  //   }
-  //   else if (std::find(fvs.begin() + fvindex, fvs.end(), cg.first) != fvs.end())
-  //   {
-  //     // we skipped a variable
-  //     if (state != State::SUBSET)
-  //     {
-  //       findCompatible(g, fvs, vlhs, &cg.second, State::SUPERSET, fvindex);
-  //     }
-  //   }
-  //   else if (state != State::SUPERSET)
-  //   {
-  //     findCompatible(g, fvs, vlhs, &cg.second, State::SUBSET, fvindex);
-  //   }
-  // }
+    if (std::find(tgt_vars.begin(), tgt_vars.end(), lbl) != tgt_vars.end())
+    {
+      // `lbl` is in `tgt_vars`.
+      findCompatible(tgt_exp, tgt_vars, rt_var, &trie, next_vars, n_inter + 1, st);
+    }
+    else
+    {
+      // `lbl` is not in `tgt_vars`.
+      findCompatible(tgt_exp, tgt_vars, rt_var, &trie, next_vars, n_inter, State::SUPERSET);
+    }
+  }
 }
 
 /**
