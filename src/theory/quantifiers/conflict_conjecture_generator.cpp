@@ -965,6 +965,97 @@ void ConflictConjectureGenerator::findCompatible(
     const size_t n_inter,
     const ConflictConjectureGenerator::State st)
 {
+  // *Variable names*
+  // 
+  // 'tgt_exp' --> 'target expansion', 'tgt_vars' --> 'target
+  // variables', 'rt_var' --> 'root variable', 'cur' --> 'cursor',
+  // 'cur_vars' --> 'variables in path to cursor', 'n_inter' -->
+  // 'number of elements in intersection', 'st' --> 'state'.
+
+  // *Expectations*
+  //
+  // Expects that `tgt_vars` is a vector of equivalence class
+  // variables, and that it does not have duplicate elements.
+  // Consequently `tgt_vars` can be treated as a set.
+  //
+  // Expects that the set of equivalence class variables that occur in
+  // `tgt_exp` is exactly `tgt_vars`.
+  //
+  // Expects that `rt_var` is an equivalence class variable.
+  //
+  // This function expects that in any top-level call to
+  // `findCompatible()` (1) `cur` is `&d_gtrie`, (2) `cur_vars` is an
+  // empty vector, (3) `n_inter` is 0, and (4) `st` is `SUBSET`.
+
+  // *Invariants*
+  //
+  // `tgt_exp`, `tgt_vars` and `rt_var` never change in recursive calls.
+  //
+  // `cur_vars` is a vector of equivalence class variables, it does
+  // not have duplicate elements, and it is the path to `*cur` in
+  // `d_gtrie`.  It is worth explaining the third part of this
+  // invariant in more detail.  Since it's a vector, `cur_vars` has
+  // the form {`v_1`, ..., `v_n`}.  It should be that `cur` points to
+  // `d_gtrie.d_children[v_1](...).d_children[v_n]`.  As a consequence
+  // of this property and the properties of `d_gtrie`, we can make the
+  // stronger claim that for every pair (`exp`, `var`) in
+  // `cur->d_gens`, `exp` is an expansion whose root equivalence class
+  // variable is `var` and the set of equivalence class variables that
+  // occur in `exp` is exactly `cur_vars`.
+  //
+  // `t_inter` is the size of the intersection of (the sets of
+  // elements in) `tgt_vars` and `cur_vars`.  Therefore if `t_inter`
+  // equals `tgt_vars.size()` then `cur_vars` must be a superset of
+  // `tgt_vars`.  Similarly if `t_inter` equals `cur_vars.size()` then
+  // `cur_vars` must be a subset of `tgt_vars`.
+  //
+  // `st` is one of `SUBSET` or `SUPERSET`.  Never `UNKNOWN`.  `st` is
+  // `SUPERSET` if and only if `cur_vars` has at least one element
+  // that is absent from `tgt_vars`.  It *does not* mean that
+  // `cur_vars` is truly a superset of `tgt_vars`.  Instead it
+  // indicates our intent to grow `cur_vars` till it is truly a
+  // superset of `tgt_vars` i.e. when `t_inter` equals
+  // `tgt_vars.size()`.  The previous sentences about `st` together
+  // imply that `st` is `SUBSET` if and only if all elements of
+  // `cur_vars` are also in `tgt_vars`.  In this case `cur_vars` is
+  // actually a subset of `tgt_vars`.
+
+  // *Objective*
+  //
+  // This function's objective is to find as many expansions `exp` as
+  // possible, derived from the equivalence class variable `rt_var`,
+  // such that `exp` is *compatible* with the target expansion
+  // `tgt_exp`.  `exp` is considered to be compatible with `tgt_exp`
+  // when the set of equivalence class variables that occur in one is
+  // a subset of the equivalence class variables that occur in the
+  // other.  In other words either `cur_vars` is a subset of
+  // `tgt_vars`, or `tgt_vars` is a subset of `cur_vars`.  Once an
+  // `exp` that meets the above conditions is found, it is paired with
+  // `tgt_exp` and promoted to a candidate conjecture.
+
+  // *Strategy*
+  //
+  // 
+  //
+  //
+  //
+  //
+  //
+  //
+  //
+
+  // In any particular recursive call if either `tgt_vars` is a subset
+  // of `curs_vars` (characterized by `state == SUBSET` and `n_covered
+  // == tgt_vars.size()`), or if `tgt_vars` is a superset of
+  // `curs_vars` (characterized by `state == UNKNOWN` or `state ==
+  // SUPERSET`), we can be sure that all the expansions in
+  // `curs->d_gens` are compatible with `tgt_exp`.  However not just
+  // any compatible expansion will do.  We explicitly want compatible
+  // expansions that are derived from `rt_var`.  This is easy to check
+  // because each element of `curs->d_gens` is a pair whose first
+  // component is an expansion and whose second component is that
+  // expansion's root variable.
+  
   // g.  The target expansion of the right-hand side.
 
   // fvs.  The set of free variables on the right-hand side.
@@ -1012,53 +1103,6 @@ void ConflictConjectureGenerator::findCompatible(
   // been processed, we can add all the LHS expansions at our current
   // location in the trie to the collection of compatible expansions.
 
-  // tgt_exp is short for 'target expansion'.
-  const Node& tgt_exp = g;
-  // tgt_vars is short for 'target variables'.
-  const std::vector<Node>& tgt_vars = fvs;
-  // rt_var is short for 'root variable'.
-  const Node& rt_var = vlhs;
-  // curs is short for 'cursor'.
-  GenTrie* curs = gt;
-  // `n_covered` is a non-negative number between 0 and
-  // `tgt_vars.size()` (both inclusive) that counts how many elements
-  // of `tgt_vars` are also in the set of variables that form the path
-  // to `cursor`, i.e. `path_curs`.  'n_covered' is short for 'number
-  // of covered variables'.
-  size_t n_covered = fvindex;
-  // The name 'curs_vars' is short for 'variables in path to cursor'.
-  // This is a sequence of variables {v0, ..., vn} such that `curs`
-  // points to the `GenTrie` instance
-  // `d_gtrie.d_children[v0](...).d_children[vn]`.  It is not a
-  // necessary part of the state.  We only maintain it for debugging.
-  std::vector<Node> curs_vars{};
-
-  // This function's objective is to find as many expansions `exp` as
-  // possible, of the equivalence class variable `rt_var`, such that
-  // `exp` is *compatible* the target expansion `tgt_exp`.  An
-  // expansion `exp` is considered to be compatible with `tgt_exp`
-  // when one's variable set is a subset of the other's variable set.
-  // If we're allowed to conflate sequences with sets, the variable
-  // set of `exp` is `curs_vars` while the variable set of `tgt_exp`
-  // is `tgt_vars`.  The preceding claim, "the variable set of `exp`
-  // is `curs_vars`", deserves a better explanation.  In any
-  // particular recursive call to `findCompatible()` the expansions in
-  // play are the first components of the pairs in the vector
-  // `curs->d_gens`.  Each of these expansions has `curs_vars` as its
-  // set of free variables.
-
-  // In any particular recursive call if either `tgt_vars` is a subset
-  // of `curs_vars` (characterized by `state == SUBSET` and `n_covered
-  // == tgt_vars.size()`), or if `tgt_vars` is a superset of
-  // `curs_vars` (characterized by `state == UNKNOWN` or `state ==
-  // SUPERSET`), we can be sure that all the expansions in
-  // `curs->d_gens` are compatible with `tgt_exp`.  However not just
-  // any compatible expansion will do.  We explicitly want compatible
-  // expansions that are derived from `rt_var`.  This is easy to check
-  // because each element of `curs->d_gens` is a pair whose first
-  // component is an expansion and whose second component is that
-  // expansion's root variable.
-
   // The following condition checks whether the expansions in the
   // vector `curs->d_gens` are compatible with `tgt_exp`.
 
@@ -1071,10 +1115,10 @@ void ConflictConjectureGenerator::findCompatible(
   // counts the size of the intersection of `curs_vars` with
   // `tgt_vars`.  If its value is `tgt_vars.size()` then all of
   // `tgt_vars` is undoubtedly covered by `curs_vars`.
-  const bool tgt_vars_subset_curs_vars = (state == State::SUBSET && n_covered == tgt_vars.size());
+  // const bool tgt_vars_subset_curs_vars = (state == State::SUBSET && n_covered == tgt_vars.size());
 
   // curs_vars_subset_tgt_vars is short for 'is `curs_vars` a proper subset of `tgt_vars`?'  
-  const bool curs_vars_subset_tgt_vars = (state == State::UNKNOWN || state == State::SUPERSET);
+  // const bool curs_vars_subset_tgt_vars = (state == State::UNKNOWN || state == State::SUPERSET);
 
   // if (tgt_vars_subset_curs_vars || curs_vars_subset_tgt_vars)
   // {

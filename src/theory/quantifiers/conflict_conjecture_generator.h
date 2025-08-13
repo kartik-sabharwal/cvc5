@@ -286,11 +286,6 @@ class ConflictConjectureGenerator : public QuantifiersModule
   };
 
   /**
-   * 
-   *
-   *
-   *
-   *
    */
   void findCompatible(const Node& tgt_exp,
                       const std::vector<Node>& tgt_vars,
