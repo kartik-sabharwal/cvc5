@@ -1313,25 +1313,56 @@ class EMatchFrame
   bool isFinished() const { return d_index == d_matches.size(); }
 };
 
-void ConflictConjectureGenerator::candidateConjecture(const Node& ai,
-                                                      const Node& bi)
+void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
+                                                      const Node& rhs_cand)
 {
-  if (ai == bi)
+  // *Argument names*
+  // 
+  // lhs_cand --> 'left hand side of candidate equality conjecture',
+  // rhs_cand --> 'right hand side of candidate equality conjecture'.
+
+  // *Expectations*
+  //
+  // This function expects that the set of equivalence class variables
+  // occurring in `lhs_cand` is a superset of the equivalence class
+  // variables occuring in `rhs_cand`.
+  
+  // If `lhs_cand` and `rhs_cand` are identical then the candidate
+  // conjecture will be trivially valid, not to mention useless.  We
+  // are instead looking for a candidate that is not deductively
+  // entailed in the current model and instead warrants a proof by
+  // induction.
+  if (lhs_cand == rhs_cand)
   {
     return;
   }
-  if (ai.isVar())
+
+  if (lhs_cand.getKind() == Kind::BOUND_VARIABLE)
   {
-    if (expr::hasSubterm(bi, ai))
+    // If we're here, it means that `lhs_cand` is an equivalence class
+    // variable.  Consequently we know that the equivalence class
+    // variables occurring in `rhs_cand` are a subset of the singleton
+    // set { `lhs_cand` }.  We expect `rhs_cand` to have at least 1
+    // equivalence class variable, so the set of equivalence class
+    // variables occurring in `rhs_cand` must be exactly { `lhs_cand`
+    // }.  We also know that `rhs_cand` isn't itself an equivalence
+    // class variable, because otherwise the condition `lhs_cand ==
+    // rhs_cand` would have been satisfied.  It follows that
+    // `rhs_cand` must be an application of some operator,
+    // specifically a constructor or an uninterpreted function.  
+
+    
+    if (expr::hasSubterm(rhs_cand, lhs_cand))
     {
       // corner case of the form x = t[x], flip sides
-      candidateConjecture(bi, ai);
+      candidateConjecture(rhs_cand, lhs_cand);
     }
     // otherwise, definitely bogus
     return;
   }
-  Node a = ai;
-  Node b = bi;
+  
+  Node a = lhs_cand;
+  Node b = rhs_cand;
   if (a.getKind() == Kind::APPLY_CONSTRUCTOR
       && b.getKind() == Kind::APPLY_CONSTRUCTOR)
   {
