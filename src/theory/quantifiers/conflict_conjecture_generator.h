@@ -285,12 +285,20 @@ class ConflictConjectureGenerator : public QuantifiersModule
     SUBSET
   };
 
-  void findCompatible(const Node& g,
-                      const std::vector<Node>& fvs,
-                      const Node& vlhs,
-                      GenTrie* gt,
-                      State state,
-                      size_t fvindex);
+  /**
+   * 
+   *
+   *
+   *
+   *
+   */
+  void findCompatible(const Node& tgt_exp,
+                      const std::vector<Node>& tgt_vars,
+                      const Node& rt_var,
+                      const GenTrie* cur,
+                      std::vector<Node>& cur_vars,
+                      const size_t n_inter,
+                      const State st);
 
   /**
    * Called when FV(a) is a superset of FV(b).
