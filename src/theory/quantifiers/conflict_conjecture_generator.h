@@ -354,8 +354,8 @@ class ConflictConjectureGenerator : public QuantifiersModule
  * of this class is implicitly associated with an equivalence class
  * and the real 'decision' here is which member of that equivalence
  * class contributes to the matching substitution.  When we backtrack
- * we need to try the term with the next index into that equivalence
- * class.  If we've exhausted all the elements in that equivalence
+ * we need to try the term with the next index in that equivalence
+ * class.  If we've exhausted all the elements in the equivalence
  * class then the match fails.
  */
 class Decision;

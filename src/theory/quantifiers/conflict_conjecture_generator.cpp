@@ -485,7 +485,7 @@ void ConflictConjectureGenerator::checkDisequality(const Node& eq)
   {
     const std::vector<Node>& gfvs = d_genToFv[g];
     Trace("ccgen-debug") << "  - " << g << std::endl;
-    State s = gfvs.empty() ? State::SUBSET : State::UNKNOWN;
+    // State s = gfvs.empty() ? State::SUBSET : State::UNKNOWN;
     findCompatible(g, gfvs, vars[0], &d_gtrie, std::vector<Node>{}, 0, State::SUBSET);
   }
 
@@ -1349,7 +1349,7 @@ void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
     // class variable, because otherwise the condition `lhs_cand ==
     // rhs_cand` would have been satisfied.  It follows that
     // `rhs_cand` must be an application of some operator,
-    // specifically a constructor or an uninterpreted function.  
+    // specifically a constructor or an uninterpreted function.
 
     
     if (expr::hasSubterm(rhs_cand, lhs_cand))
@@ -1545,7 +1545,7 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
     Trail decs{};
 
     // Add the first decision point to the queue.
-    decs.emplace_back(d_ee, lhs, rep);
+    decs.emplace_back(Decision{term_db, d_ee, lhs, rep});
 
     // `lvl`, short for 'decision level', is the index that represents
     // the front of the queue whose elements are stored in `decs`.
@@ -1605,6 +1605,43 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
         // We should print the substitution.
         std::cout << "Found grounding substitution: " << subs << std::endl;
 
+        // We need to check whether the LHS and RHS are equivalent
+        // under the substitution.
+
+        // rhs_img --> image of RHS under subs.
+        const Node rhs_img = subs.apply(rhs);
+
+        // We have a guarantee that the image of `lhs` under `subs` is
+        // in the known equivalence class of `rep` because we used it
+        // to compute the substitution `subs`.  We have no such
+        // guarantee for `rhs_img`.  However we can check this by
+        // getting the 'entailed term' for `rhs_img` and making sure
+        // it's not `Node::null()`.  rhs_img_ent --> entailed term for
+        // image of RHS.
+        const Node rhs_img_ent = ent_chk->getEntailedTerm(rhs_img);
+        
+        if (!rhs_img_ent.isNull())
+        {
+          // rhs_img_rep --> representative of equivalence class of
+          // `rhs_img_ent`.
+          const Node rhs_img_rep = d_ee->getRepresentative(rhs_img_ent);
+
+          if (d_ee->areDisequal(rep, rhs_img_rep, false))
+          {
+            // The candidate conjecture is unlikely to be valid and
+            // should be rejected.
+            return true;
+          }
+          else
+          {
+            // Yes, it's a bit strange, but we're incrementing
+            // `confirmed` before we increment `tested`.
+            confirmed++;
+          }
+
+          tested++;
+        }
+
         // We need to backtrack so that we can find more grounding
         // substitutions.
         if (lvl > 0)
@@ -1636,7 +1673,11 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
             // can't possibly succeed (which is why we're
             // backtracking), all subsequent decisions, i.e. those at
             // index `lvl` and up, need to be removed.
-            decs.resize(lvl);
+            size_t n_remove = decs.size() - lvl;
+            for (size_t i = 0; i < n_remove; i++)
+            {
+              decs.pop_back();
+            }
 
             // Thanks to our invariant we have that the last `push()`
             // that was performed was effectively `decs[lvl -
@@ -1669,9 +1710,11 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
           dec.pop(subs);
         }
       }
-    }    
+    }
   }
 
+  Trace("ccgen-filterEmatching") << "Tested " << tested << " substitutions, " << confirmed << " confirmed" << std::endl;
+  
   return false;
 }
 
@@ -2571,7 +2614,7 @@ Decision::Decision(TermDb* term_db, eq::EqualityEngine* ee, const Node& pat, con
     bool accept = true;
 
     // The name 'ent' is short for 'entry'.
-    for (const std::pair<size_t, Node>& ent : ground_args)
+    for (const std::pair<const size_t, Node>& ent : ground_args)
     {
       // 'i' is short for 'index of ground child of `pat`'.
       const size_t i = std::get<0>(ent);
