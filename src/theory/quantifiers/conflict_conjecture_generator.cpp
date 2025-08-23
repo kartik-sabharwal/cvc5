@@ -53,6 +53,7 @@ ConflictConjectureGenerator::ConflictConjectureGenerator(
       d_conjGenIndex(userContext()),
       d_conjGenCache(userContext())
 {
+  d_shortCircuitCalled = false;
   d_false = nodeManager()->mkConst(false);
 
   d_subOptions.copyValues(options());
@@ -84,6 +85,96 @@ QuantifiersModule::QEffort ConflictConjectureGenerator::needsModel(
   return QEFFORT_STANDARD;
 }
 
+/* This function is supposed to add the following formula as a pending lemma.
+ *
+ *     let phi = forall x, y, z. plus(x, plus(y, z)) = plus(z, plus(x, y))
+ *     in or(phi, not(phi))
+ *
+ * It also adds the following as a pending phase requirement.
+ *
+ *     not(phi)
+ *
+ * We should be able to immediately solve the times-right-dist.smt2 with this
+ * combination.
+ *
+ * To do this, we need to:
+ *
+ * 0.  Grab the type node for the natural number sort.
+ * 1.  Construct bound variable symbols for 'x', 'y', and 'z'.
+ * 2.  Find the symbol for 'plus'.
+ * 3.  Construct 'phi'.
+ * 4.  Construct 'lem', the disjunction of phi with its negation.
+ * 5.  Add 'lem' as a pending lemma.
+ * 6.  Add 'phi' with 'false' as a pending phase requirement.
+ *
+ * The way to look at the entire list of function symbols is to use `getTermDatabase()`, `getNumOperators()` and `getOperator()`.
+ * The way to create bound variables is to use `NodeManager::mkBoundVar()`.
+ * You will also need the kinds `APPLY_UF`, `BOUND_VAR_LIST`, and `FORALL`.
+ * You will need `nodeManager()`, `mkNode()`, `negate()`, `eqNode()`, `orNode()`.
+ * To send the lemma you'll need the member functions `addPendingLemma()` and `addPendingPhaseRequiement()` and the field `d_qim`.
+ */
+void ConflictConjectureGenerator::shortCircuit()
+{
+  Node plus = Node::null();
+
+  // Search for the first operator with the name "plus".
+  {
+    // term_db --> term database.
+    TermDb* term_db = getTermDatabase();
+
+    // n_ops --> number of operators.
+    const size_t n_ops = term_db->getNumOperators();
+
+    // i --> operator index.
+    for (size_t i = 0; i < n_ops; ++i)
+    {
+      // op --> i th operator.
+      const Node op = term_db->getOperator(i);
+
+      if (op.getName() == "plus")
+      {
+        plus = op;
+        break;
+      }
+    }
+  }
+
+  // We expect the the range type of `plus` is the natural number datatype.
+  // nat_ty --> natural number type.
+  const TypeNode nat_ty = plus.getType().getRangeType();
+
+  // Create three bound variables of the natural number datatype.
+  const Node x = NodeManager::mkBoundVar(nat_ty);
+  const Node y = NodeManager::mkBoundVar(nat_ty);
+  const Node z = NodeManager::mkBoundVar(nat_ty);
+
+  // Grab a pointer to the current NodeManager instance.
+  NodeManager* node_mgr = nodeManager();
+  
+  // Construct phi.
+  // pbl --> left hand of body of phi.
+  const Node pbl = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, x, node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, y, z})});
+  // pbr --> right hand of body of phi.
+  const Node pbr = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, z, node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, x, y})});
+  // pb --> body of phi.
+  const Node pb = pbl.eqNode(pbr);
+  const Node phi = node_mgr->mkNode(Kind::FORALL, std::vector<Node>{node_mgr->mkNode(Kind::BOUND_VAR_LIST, std::vector<Node>{x, y, z}), pb});
+
+  // Construct lem.
+  const Node lem = phi.orNode(phi.negate());
+
+  // Send lem.
+  d_qim.addPendingLemma(lem, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
+
+  // Add a phase requirement.
+  d_qim.addPendingPhaseRequirement(phi, false);
+
+  // Let's 'remember' that we've called `shortCircuit()` once.  We don't need to call it multiple times.
+  d_shortCircuitCalled = true;
+  
+  return;
+}
+
 void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
 {
   if (quant_e != QEFFORT_STANDARD)
@@ -91,11 +182,18 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     return;
   }
 
-  // buildGrammarFromContext();
-
+  // `shortCircuit()` will ensure that the correct lemma for
+  // times-right-dist.smt2 is sent to the solver.  This is a sanity check to
+  // ensure that the process of adding the correct splitting lemma and phase
+  // requirement induces an 'unsat' response from the solver.  We return
+  // immediately after.
+  // if (!d_shortCircuitCalled)
+  // {
+  //   shortCircuit();    
+  // }
   // return;
   
-  Trace("cconj") << "ConflictConjectureGenerator: check" << std::endl;
+  Trace("cconjGen") << "(list " << std::endl;
   
   // update the function definitions
   d_funDefEvaluator.clear();
@@ -108,12 +206,6 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     Node phi = model->getAssertedQuantifier(i);
     Trace("ccgen-debug") << "- quant : " << phi << std::endl;
 
-    // if (d_qreg.getQuantAttributes().isFunDef(phi))
-    // {
-    //   Trace("ccgen-debug") << "  fun def: " << phi << std::endl;
-    //   d_funDefEvaluator.assertDefinition(phi);
-    // }
-
     // record symbols
     expr::getSymbols(phi, qsyms, qvisited);
   }
@@ -124,18 +216,20 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
   d_eqcGenRec.clear();
   std::vector<Node> candDeq;
   eq::EqClassIterator eqc = eq::EqClassIterator(d_false, d_ee);
+  Trace("cconjGen") << "(list" << std::endl << "\"disequalities\"" << std::endl;
   while (!eqc.isFinished())
   {
     Node n = *eqc;
     if (n.getKind() == Kind::EQUAL)
     {
+      Trace("cconjGen") << "(quote " << n << ")" << std::endl;
       candDeq.push_back(n);
     }
     ++eqc;
   }
+  Trace("cconjGen") << ")" << std::endl;
 
-  Trace("ccgen") << "...found " << candDeq.size() << " candidate disequalities"
-                 << std::endl;
+  Trace("cconjGen") << "(list " << std::endl << "\"kept disequalities\"" << std::endl;
   for (const Node& eq : candDeq)
   {
     Trace("ccgen-debug") << "- disequality: " << eq << std::endl;
@@ -165,9 +259,12 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
       continue;
     }
     Trace("ccgen-debug") << "...keep " << eq << std::endl;
+    Trace("cconjGen") << "(quote " << eq << ")" << std::endl;
     checkDisequality(eq);
   }
+  Trace("cconjGen") << ")" << std::endl;
 
+  Trace("cconjGen") << "(list " << std::endl << "\"send\"" << std::endl;
   // candidate conjectures
   NodeManager* nm = nodeManager();
   while (d_conjGenIndex.get() < d_conjGen.size())
@@ -182,19 +279,22 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
           nm->mkNode(Kind::FORALL, nm->mkNode(Kind::BOUND_VAR_LIST, bvs), lem);
     }
     d_currConjectures.push_back(lem);
-    lem = nm->mkNode(Kind::OR, lem.negate(), lem);
-    Trace("ccgen-lemma") << "ConflictConjectureGenerator: send lemma " << lem
+    const Node case_split = nm->mkNode(Kind::OR, lem.negate(), lem);
+    Trace("ccgen-lemma") << "ConflictConjectureGenerator: send lemma " << case_split
                          << std::endl;
-    d_qim.addPendingLemma(lem,
-                          InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
+    d_qim.addPendingLemma(case_split, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
 
-    // DO WE NEED TO ADD A PHASE REQUIREMENT HERE?  LET'S MAKE SURE WE DO IT SO
-    // THAT WE TRY TO PROVE THE CONJECTURE BY INDUCTION. Look at the enumerative
-    // conjecture generator for instructions.
-    
+    // We need to try a proof by induction.  So we do the following to trigger
+    // skolemization with inductive strengthening.
+    d_qim.addPendingPhaseRequirement(lem, false);
+
     d_conjGenIndex = d_conjGenIndex.get() + 1;
+
+    Trace("cconjGen") << "(quote " << lem << ")" << std::endl;
   }
-  Trace("cconj") << "ConflictConjectureGenerator: end check" << std::endl;
+  Trace("cconjGen") << ")" << std::endl;
+
+  Trace("cconjGen") << ") " << std::endl;
 }
 
 void ConflictConjectureGenerator::buildGrammarFromContext()
@@ -473,21 +573,28 @@ void ConflictConjectureGenerator::checkDisequality(const Node& eq)
     Node r = d_ee->getRepresentative(eq[i]);
     Node v = getOrMkVarForEqc(r);
     vars.push_back(v);
+    Trace("cconjGen") << "(list " << std::endl << "\"" << (i == 0 ? "lhs" : "rhs") << " expansions\"" << std::endl;
     getGeneralizations(v);
+    Trace("cconjGen") << ")" << std::endl;
   }
   // see if any generalization of the right hand
   std::vector<Node>& genRhs = d_eqcGenRec[vars[1]];
 
   Trace("ccgen") << "- look at " << genRhs.size()
                  << " recursive generalizations of RHS" << std::endl;
+
+  Trace("cconjGen") << "(list " << std::endl << "\"compatible\"" << std::endl;
   // generate the candidates, store in d_conjBuffer
   for (const Node& g : genRhs)
   {
     const std::vector<Node>& gfvs = d_genToFv[g];
     Trace("ccgen-debug") << "  - " << g << std::endl;
     // State s = gfvs.empty() ? State::SUBSET : State::UNKNOWN;
+    Trace("cconjGen") << "(list " << std::endl << "(list \"rhs\" " << "(quote " << g << "))" << std::endl;
     findCompatible(g, gfvs, vars[0], &d_gtrie, std::vector<Node>{}, 0, State::SUBSET);
+    Trace("cconjGen") << ")" << std::endl;
   }
+  Trace("cconjGen") << ")" << std::endl;
 
   // go back and see if the conjectures should be filtered
   for (const Node& lem : d_conjBuffer)
@@ -613,7 +720,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   // class variable.
 
   // We can think of this function as performing a random walk in a graph over
-  // terms and adding the vertices visited to the vector referenced by grecs.
+  // terms and adding the vertices visited to the vector referenced by `grecs`.
   // The vertices in this graph are terms built with the equivalence class
   // variables and function-like symbols in the signature (user-declared
   // function symbols and constructor symbols).  Let s and t be two vertices in
@@ -645,7 +752,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   // This is the number of expansions we will perform.  Since performing such an
   // expansion is equivalent to taking one step in the random walk, it can be
   // seen as the intended length of our random walk.
-  size_t depth = 3;
+  size_t depth = 5;
 
   // The vertex we are currently at in the random walk.  It's initially v
   // because our random walk starts at v.
@@ -666,7 +773,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   // during our random walk as well as the expansions we have chosen.  We can
   // think of it as a summary of the walk itself.
   // 
-  // **Note.** By choosing to represent our walk as a substitution we force
+  // **Note**.  By choosing to represent our walk as a substitution we force
   // ourselves to expand an equivalence class variable the same way each time we
   // encounter it.  It might be worth exploring a random walk strategy that
   // allows us to expand an equivalence class variable differently each time we
@@ -686,6 +793,13 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     // Let's print our choice.
     Trace("ccgen-debug-expand") << "process " << vc << std::endl;
 
+    // Trace("getGeneralizationsInternal") << "(list \"d_bvToEqc\"";
+    // for (const std::pair<const Node, Node>& entry : d_bvToEqc)
+    // {
+    //   Trace("getGeneralizationsInternal") << " (list " << std::get<0>(entry) << " " << std::get<1>(entry) << ")";
+    // }
+    // Trace("getGeneralizationsInternal") << "\"vc\"" << " " << vc << ")";
+    
     // Before we try to expand vc let's ensure that it's truly an equivalence
     // class variable!
     Assert(d_bvToEqc.find(vc) != d_bvToEqc.end());
@@ -804,18 +918,23 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     // Also update fvs as described above.  Removing vc is the first step.
     fvs.erase(fvs.begin() + rindex);
 
-    // gs has the form where it's an application of a user-declared function
-    // symbol or a constructor symbol and its arguments are all equivalence
-    // class variables.  We want to add these equivalence class variables to fvs
-    // but want to maintain the invariant that fvs has no duplicates.
-    for (const Node& eqc_var : gs)
+    // The second step: all equivalence class variables that occur in `gs` and
+    // do not occur in `fvs` must be added to `fvs`.  We gather the variables in
+    // `gs_vars` before adding them.  Note that `expr::getVariables()` will grab
+    // user-defined function symbols.  We should make sure that we're only
+    // adding terms with the kind `BOUND_VARIABLE` to `fvs`.
+    std::unordered_set<Node> gs_vars;
+    expr::getVariables(gs, gs_vars);
+
+    for (const Node& var : gs_vars)
     {
-      if (std::find(fvs.begin(), fvs.end(), eqc_var) == fvs.end())
+      if ((var.getKind() == Kind::BOUND_VARIABLE) &&
+          (std::find(fvs.begin(), fvs.end(), var) == fvs.end()))
       {
-        fvs.insert(fvs.begin() + rindex, eqc_var);
+        fvs.insert(fvs.begin() + rindex, var);
       }
     }
-
+    
     // Trace("ccgen-debug-expand") << "...expand to " << gs << std::endl;
     // std::vector<Node> newVars;
     // if (g.getNumChildren() > 0)
@@ -853,6 +972,8 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     // }
     // Trace("ccgen-debug") << "...free variables now " << fvs << std::endl;
 
+    Trace("cconjGen") << "(quote " << cur << ")" << std::endl;
+    
     // cur is now a candidate term.  Recalling the description we had provided
     // earlier: we have reached cur during a random walk that started at v.
     // Therefore we should record cur in grecs.  (Recall also that grecs is a
@@ -1103,6 +1224,8 @@ void ConflictConjectureGenerator::findCompatible(
 
       if (var == rt_var)
       {
+        Trace("cconjGen") << "(quote " << exp << ")" << std::endl;
+
         // Remember that `candidateConjecture()` expects the
         // equivalence class variables that occur in its first
         // argument to be a superset of the equivalence class
@@ -1396,14 +1519,21 @@ void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
   d_conjBuffer.insert(lem);
 }
 
-bool ConflictConjectureGenerator::filterConjecture(const Node& clem)
+bool ConflictConjectureGenerator::filterConjecture(Node clem)
 {
+  Trace("cconjGen") << "(list \"filter\" (quote " << clem << ")";
+  
   Trace("cconj-filter") << "Candidate conjecture : " << clem[0]
                         << " == " << clem[1] << "?" << std::endl;
   if (d_conjGenCache.find(clem) != d_conjGenCache.end())
   {
     Trace("cconj-filter") << "...already in cache" << std::endl;
+    Trace("cconjGen") << " (list \"cache\" #f))" << std::endl;
     return true;
+  }
+  else
+  {
+    Trace("cconjGen") << " (list \"cache\" #t)";
   }
   Node a = clem[0];
   Node b = clem[1];
@@ -1414,15 +1544,29 @@ bool ConflictConjectureGenerator::filterConjecture(const Node& clem)
     if (filterEvalsToFalse(a, b))
     {
       Trace("cconj-filter") << "...filtered based on evaluation" << std::endl;
+      Trace("cconjGen") << " (list \"evaluation\" #f))" << std::endl;
       return true;
     }
+    else
+    {
+      Trace("cconjGen") << " (list \"evaluation\" #t)";
+    }
   }
-  
+
+  Trace("ConflictConjectureGenerator::filterConjecture")
+      << "Calling filterEmatching() >>>>>" << std::endl;
+  const bool discard = filterEmatching(a, b);
+  Trace("ConflictConjectureGenerator::filterConjecture") << "<<<<< Called filterEmatching()" << std::endl;
   Trace("cconj-filter") << "Try filter based on E-matching" << std::endl;
-  if (filterEmatching(a, b))
+  if (discard)
   {
     Trace("cconj-filter") << "...filtered based on E-matching" << std::endl;
+    Trace("cconjGen") << " (list \"e-matching\" #f))" << std::endl;
     return true;
+  }
+  else
+  {
+    Trace("cconjGen") << " (list \"e-matching\" #t)";
   }
 
   Trace("cconj-filter") << "Try filter based on deductively entailed"
@@ -1431,13 +1575,20 @@ bool ConflictConjectureGenerator::filterConjecture(const Node& clem)
   {
     Trace("cconj-filter") << "...filtered based on deductively entailed"
                           << std::endl;
+    Trace("cconjGen") << " (list \"entailment\" #f))" << std::endl;
     return true;
   }
+  else
+  {
+    Trace("cconjGen") << " (list \"entailment\" #t)";
+  }
+
+  Trace("cconjGen") << ")" << std::endl;
   
   return false;
 }
 
-bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& rhs)
+bool ConflictConjectureGenerator::filterEmatching(Node lhs, Node rhs)
 {
   // Both `lhs` and `rhs` are expansions.  (Recall that all expansions
   // are built from user-declared function symbols, constructor
@@ -1545,7 +1696,10 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
     Trail decs{};
 
     // Add the first decision point to the queue.
-    decs.emplace_back(Decision{term_db, d_ee, lhs, rep});
+    // init_dec --> 'initial decision'.
+    Trace("ConflictConjectureGenerator::filterEmatching") << "Calling Decision() >>>>>" << std::endl;
+    decs.emplace_back(new Decision(term_db, d_ee, lhs, rep, 0, false));
+    Trace("ConflictConjectureGenerator::filterEmatching") << "<<<<< Returned from call to Decision()" << std::endl;
 
     // `lvl`, short for 'decision level', is the index that represents
     // the front of the queue whose elements are stored in `decs`.
@@ -1603,7 +1757,7 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
         // known equivalence class.
 
         // We should print the substitution.
-        std::cout << "Found grounding substitution: " << subs << std::endl;
+        // std::cout << "Found grounding substitution: " << subs << std::endl;
 
         // We need to check whether the LHS and RHS are equivalent
         // under the substitution.
@@ -1622,9 +1776,11 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
         
         if (!rhs_img_ent.isNull())
         {
+          Trace("filterEmatching") << "before call to getRepresentative() in filterEmatching()" << std::endl;
           // rhs_img_rep --> representative of equivalence class of
           // `rhs_img_ent`.
           const Node rhs_img_rep = d_ee->getRepresentative(rhs_img_ent);
+          Trace("filterEmatching") << "after call to getRepresentative() in filterEmatching()" << std::endl;
 
           if (d_ee->areDisequal(rep, rhs_img_rep, false))
           {
@@ -1647,7 +1803,7 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
         if (lvl > 0)
         {
           --lvl;
-          decs[lvl].pop(subs);
+          decs[lvl]->pop(subs);
         }
         else
         {
@@ -1657,9 +1813,10 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
       }
       else
       {
-        Decision& dec = decs[lvl];
+        // dec --> 'decision'.
+        Decision* dec = decs[lvl];
 
-        if (dec.isFinished())
+        if (dec->isFinished())
         {
           // Situation 2.  `lvl` is a valid index into `decs` but
           // `dec` has no more candidate terms.
@@ -1676,13 +1833,16 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
             size_t n_remove = decs.size() - lvl;
             for (size_t i = 0; i < n_remove; i++)
             {
+              // dec_del --> 'decision to delete'
+              Decision* dec_del = decs.back();
               decs.pop_back();
+              delete dec_del;
             }
 
             // Thanks to our invariant we have that the last `push()`
             // that was performed was effectively `decs[lvl -
             // 1].push()`, and that's what we need to undo with `pop()`.
-            decs[lvl - 1].pop(subs);
+            decs[lvl - 1]->pop(subs);
 
             // At the moment `lvl` is not a legal index into `decs`.
             // We set it to the maximum legal index, which is (`lvl` -
@@ -1694,7 +1854,7 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
             go_on = false;
           }
         }
-        else if (dec.push(term_db, d_ee, subs, decs))
+        else if (dec->push(term_db, d_ee, subs, decs))
         {
           // Situation 3.  In this case we simply increment `lvl` and
           // proceed to the next iteration.
@@ -1707,7 +1867,7 @@ bool ConflictConjectureGenerator::filterEmatching(const Node& lhs, const Node& r
           // unsuccessful `push()` can destructively modify `subs` so we run
           // `decs[lvl].pop()` to restore the invariant.
 
-          dec.pop(subs);
+          dec->pop(subs);
         }
       }
     }
@@ -2540,103 +2700,161 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
   return false;
 }
 
-Decision::Decision(TermDb* term_db, eq::EqualityEngine* ee, const Node& pat, const Node& rep)
+const Node& Decision::getPat()
 {
-  // We assume that `pat` is not itself a variable.  This means it's
-  // an application of a function-like symbol, also called an
-  // operator, which we can retrieve.  Why do we need it?  Because we
-  // want to pre-emptively reject the members of the equivalence class
-  // of `rep` that don't have `op` as their root symbol.
-  const Node& op = pat.getOperator();
+  return d_pat;  
+}
 
-  // We want to collect all the variable-free children of `pat` along
-  // with their positions in the following map.  After populating
-  // `ground_args` it will satisfy the property that the pair (i, t)
-  // is in `ground_args` if and only if `pat[i]` is a variable-free
-  // and its representative is `t`.
+
+/**
+ * This is the constructor for the `Decision` class.  As stated in the header
+ * file, it represents our intent to find a substitution `subs` such that the
+ * current equality engine `ee` entails that under the substitution `subs`, the
+ * pattern `pat` is in the equivalence class representated by `rep`.
+ *
+ * This function expects that `term_db` is a pointer to the current term
+ * database, `ee` is a pointer to the current equality engine, `pat` is a term
+ * constructed with user-declared function symbols, constructor symbols and
+ * equivalence class variables, and finally that `rep` is the representative of
+ * some equivalence class.  It is also expected that `pat` is a node with an
+ * operator, in other words it's not an equivalence class variable.  It is
+ * **not** expected that `pat` or any of its subterms are known to the equality
+ * engine, even if they are variable-free.  If for whatever reason we intend to
+ * ask the solver for the equivalence class representative of a particular child
+ * of `pat` we need to ensure that the child is known to the equality engine.
+ *
+ * To recap, let 'P' denote the set of subterms of `pat` that are themselves
+ * patterns i.e. contain equivalence class variables.  This e-matching algorithm
+ * works by associating each element in 'P' with a specific member of a specific
+ * equivalence class.  Each instance of `Decision` represents one such
+ * association where the subterm of `pat` is stored in `d_pat`, the equivalence
+ * class is left implicit, and we are trying to associate `d_pat` with
+ * `d_cands[d_next - 1]`.  The elements of `d_cands` are exactly the members of
+ * the implicit equivalence class that (1) have the same operator, and (2) agree
+ * with `d_pat` on all non-variable children.
+ *
+ * It behooves us to note the following.  Let `par_dec` (parent decision) be an
+ * instance of `Decision`.  We know it represents our intent to match
+ * `par_dec.d_pat` (call this 'p') with `par_dec.d_cands[par_dec.d_next - 1]`
+ * (call this 't').  It also implies that we intend to match the 'i' th child of
+ * 'p' with the representative of the equivalence class of the corresponding
+ * child of 't'.  This dictates what the 'descendants' of `par_dec` will look
+ * like, and these descendants are created when we run `par_dec.push()`.
+ *
+ * This function uses a few local variables.  These merit some explanation.
+ *
+ * `op` is the operator of `pat`.  It's expected to be a user-declared
+ * uninterpreted function symbol or a constructor symbol.  It will be used when
+ * populating `d_cands`.
+ *
+ * `ground_args` is a list of pairs.  It starts off empty.  Once we populate it,
+ * we expect that it contains a pair (`i`, `t`) if and only if `pat[i]` is free
+ * of equivalence class variables.  The nature of `t` depends on whether
+ * `pat[i]` exists in the equality engine.  If it exists, we expect `t` to be
+ * the representative of the equivalence class of `pat[i]`.  In case `t` doesn't
+ * exist in the equality engine, we expect `t` to be exactly `pat[i]`.
+ * `ground_args`, too, will be used when populating `d_cands`.
+ */
+Decision::Decision(TermDb* term_db, eq::EqualityEngine* ee, Node pat, Node rep, Decision* dec, bool consider)
+{
+  d_pat = pat;
+  d_next = 0;
+  d_rec_args = std::vector<size_t>{};
+  d_var_args = std::vector<size_t>{};
   std::map<size_t, Node> ground_args{};
+  
+  // The following loop populates `d_rec_args`, `d_var_args`, and `ground_args`.  
 
-  // The following loop populates `ground_args` as well as the fields
-  // `d_var_args` and `d_rec_args`.
-  const size_t nargs = pat.getNumChildren();
-  for (size_t i = 0; i < nargs; i++)
+  // n_args --> number of arguments
+  const size_t n_args = d_pat.getNumChildren();
+  for (size_t i = 0; i < n_args; i++)
   {
-    // The i th child of pat.
-    const Node& c = pat[i];
+    // c --> child
+    const Node c = d_pat[i];
 
     if (c.getKind() == Kind::BOUND_VARIABLE)
     {
-      // `c` is a matchable variable.
+      // `c` is a matchable (equivalence class) variable.
       d_var_args.push_back(i);
     }
     else if (!expr::hasBoundVar(c))
     {
-      // `c` is a term with no matchable variables.
-      ground_args[i] = ee->getRepresentative(c);
+      // `c` is free of equivalence class variables.
+      if (ee->hasTerm(c))
+      {
+        ground_args[i] = ee->getRepresentative(c);
+      }
+      else
+      {
+        ground_args[i] = c;
+      }
     }
     else
     {
-      // `c` is a non-variable term that contains matchable variables.
+      // `c` is a non-variable subterm of `pat` that is itself a pattern.
       d_rec_args.push_back(i);
     }
   }
 
-  // The objective of the following loop is to populate `d_cands` with
-  // members of the equivalence class of `rep` that (1) have `op` as
-  // the root symbol, (2) are active, and (3) agree on all ground
-  // terms.
+  // The following loop populates `d_cands`.  Once we're out of the loop we
+  // expect that a term is in `d_cands` if and only if all these conditions are
+  // satisfied (1) it is a member of the equivalence class of `rep`, (2) its
+  // operator is `op`, (3) it is 'active', and (4) it agrees with `d_pat` on all
+  // variable-free terms.
+  //
+  // **Note**.  I need to understand what 'active' means.  According to Andy the
+  // restriction to active terms "will filter terms that are congruent to
+  // another term we have already considered."
 
-  // TODO.  I need to understand what 'active' means in this context.
-  // According to Andy the restriction to active terms "will filter
-  // terms that are congruent to another term we have already
-  // considered."
+  Assert(d_pat.hasOperator());
+  // op --> operator.
+  const Node& op = d_pat.getOperator();
 
-  // The name 'mem_it' is short for 'iterator over members of
-  // equivalence class'.
+  // mem_it --> iterator for members of equivalence class.
   eq::EqClassIterator mem_it = eq::EqClassIterator(rep, ee);
   while (!mem_it.isFinished())
   {
-    // 'mem' is short for 'member of equivalence class'.
+    // mem --> member of equivalence class.
     const Node& mem = *mem_it;
 
     ++mem_it;
     
     if (!mem.hasOperator() || mem.getOperator() != op || !term_db->isTermActive(mem))
     {
-      // If we're here then `mem` violates one of conditions (1) or
-      // (2).  There's no point adding it to `d_cands`.
+      // No point adding `mem` to `d_cands`.
       continue;
     }
 
-    // The following loop checks condition (3).  If `accept` is true
-    // when we break out of the loop we'll add `mem` to `d_cands`.
-    // We'll reject otherwise.
+    // The following loop ensures condition (4) stated above.
+
+    // Should we add `mem` to `d_cands`?  So far, yes.  We'll change this to
+    // `false` if necessary.
     bool accept = true;
 
-    // The name 'ent' is short for 'entry'.
+    // ent --> entry.
     for (const std::pair<const size_t, Node>& ent : ground_args)
     {
-      // 'i' is short for 'index of ground child of `pat`'.
+      // i --> index of ground child of `pat`.
       const size_t i = std::get<0>(ent);
 
-      // 'rgp' is short for 'representative of ground child of `pat`'.
+      // rgp --> representative of ground child of `pat`.
       const Node& rgp = std::get<1>(ent);
 
-      // 'rgm' is short for 'representative of ground child of `mem`'.
+      // rgm --> representative of ground child of `mem`.
       const Node& rgm = ee->getRepresentative(mem[i]);
 
       if (rgp != rgm)
       {
-        // `pat` and `mem` happen to disagree on a ground term.  `mem`
-        // obviously can't match `pat`.
+        // `pat` and `mem` disagree on a ground term.  We shouldn't add `mem` to
+        // `d_cands`.
         accept = false;
         break;
       }
     }
 
-    // Fulfilling our promise about `accept`.
     if (accept)
     {
+      // No problems thus far.  Add `mem` to `d_cands`.
       d_cands.push_back(mem);
     }
   }
@@ -2646,6 +2864,8 @@ bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& 
 {
   if (isFinished())
   {
+    // Trace("cconjGen") << " \"out\")" << std::endl;
+
     // If there are no more members in the equivalence class associated
     // with this instance that could match `d_pat` then we have to fail.
     return false;
@@ -2694,6 +2914,8 @@ bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& 
       }
       else
       {
+        // Trace("cconjGen") << " \"out\")" << std::endl;        
+
         // We will not backtrack yet.  Instead we'll leave it up to the
         // caller, `filterEmatching()`, to call `pop()` after we return
         // `false`.
@@ -2725,14 +2947,18 @@ bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& 
   
   for (const size_t i : d_rec_args)
   {
+    Trace("Decision-push") << "before call to getRepresentative() in push()" << std::endl;
     // 'rep' is short for 'representative'.
     const Node& rep = ee->getRepresentative(cand[i]);
+    Trace("Decision-push") << "after call to getRepresentative() in push()" << std::endl;
 
     // TODO.  The following criterion is taken from Andy's code.  I
     // don't know why he's checking this.  I should ask why
     // `isConst()` is important.
     if (!rep.isConst())
     {
+      // Trace("cconjGen") << " \"out\")" << std::endl;
+
       return false;
     }
     
@@ -2742,11 +2968,15 @@ bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& 
   // Let's actually construct and queue up the recursive jobs, which
   // are represented by instances of `Decision`.
 
+  // it_no is 'iteration number'
+  size_t it_no = 0;
+
   // 'n_rec_args' is short for 'number of arguments for recursive calls'.
   const size_t n_rec_args = d_rec_args.size();
   for (size_t i = 0; i < n_rec_args; i++)
   {
-    decs.emplace_back(Decision(term_db, ee, d_pat[d_rec_args[i]], reps_rec[i]));
+    ++it_no;
+    decs.emplace_back(new Decision(term_db, ee, d_pat[d_rec_args[i]], reps_rec[i], this, true));
   }
 
   return true;

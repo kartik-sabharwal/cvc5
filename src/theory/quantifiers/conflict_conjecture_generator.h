@@ -93,6 +93,9 @@ class ConflictConjectureGenerator : public QuantifiersModule
   std::string identify() const override;
 
  private:
+  /** Have we called shortCircuit() yet? */
+  bool d_shortCircuitCalled;
+
   /** Cached value of nodeManager()->mkConst(false). */
   Node d_false;
 
@@ -236,6 +239,9 @@ class ConflictConjectureGenerator : public QuantifiersModule
   /** The options for subsolver calls. */
   Options d_subOptions;
 
+  /** Should solve times-right-dist.smt2 instantly. */
+  void shortCircuit();
+  
   /**
    * The function that inspects the context to build a grammar for conjecture
    * generation.
@@ -303,7 +309,7 @@ class ConflictConjectureGenerator : public QuantifiersModule
   /**
    * Runs the candidate conjecture clem through all the filters. 
    */
-  bool filterConjecture(const Node& clem);
+  bool filterConjecture(Node clem);
 
   /**
    * See if there is a substituion sigma such that (a = b)*sigma is false, where
@@ -311,7 +317,7 @@ class ConflictConjectureGenerator : public QuantifiersModule
    *
    * @return true if we filter the conjecture a = b.
    */
-  bool filterEmatching(const Node& a, const Node& b);
+  bool filterEmatching(Node a, Node b);
 
   bool filterEmatchingOld(const Node& a, const Node& b);
 
@@ -364,7 +370,7 @@ class Decision;
  * A `Trail` is a stack of `Decision` instances.  It can also be
  * viewed as a queue of jobs.
  */
-typedef std::vector<Decision> Trail;
+typedef std::vector<Decision*> Trail;
 
 class Decision
 {
@@ -407,6 +413,7 @@ class Decision
     std::unordered_set<size_t> d_bound;
 
    public:
+     const Node& getPat();
     /**
      * An instance of this class represents our intent to find a
      * substitution, let's call it 'subs', such that the current
@@ -423,7 +430,7 @@ class Decision
      * same function symbol as `pat`, has the same number of arguments
      * as `pat`, and agrees with `pat` on all ground terms.
      */
-    Decision(TermDb* term_db, eq::EqualityEngine* ee, const Node& pat, const Node& rep);
+    Decision(TermDb* term_db, eq::EqualityEngine* ee, Node pat, Node rep, Decision* dec, bool consider);
     /**
      * Try to grow `substn` by matching `d_pat` (the pattern) with
      * `d_cand[d_next]` (the next candidate).  Assume `d_bound` is
