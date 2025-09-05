@@ -93,8 +93,17 @@ class ConflictConjectureGenerator : public QuantifiersModule
   std::string identify() const override;
 
  private:
+  /** Have we populated the initial set of universally quantified formulas? */
+  bool d_iuqf_populated;
+
+  /** The initial set of universally quantified formulas. */
+  std::unordered_set<Node> d_iuqf;
+
+  /** Has this quantifiers module been turned off? */
+  bool d_switched_off;
+
   /** Have we called shortCircuit() yet? */
-  bool d_shortCircuitCalled;
+  bool d_short_circuited;
 
   /** Cached value of nodeManager()->mkConst(false). */
   Node d_false;
@@ -223,10 +232,10 @@ class ConflictConjectureGenerator : public QuantifiersModule
    * d_conjGen & d_conjGenIndex.  Any candidate conjecture that passes all filters is
    * added to this vector.  It is not cleared between instantiation rounds.  The next
    * conjecture to potentially make into a splitting lemma is d_conjGenIndex.get().
-   * 
+   *
    * d_conjGenCache.  d_conjGenCache is a version of d_conjGen that is faster to
    * search through because it's a hash set as opposed to a vector.
-   * 
+   *
    * d_currConjectures.  Once a conjecture from d_conjGen is sent as a splitting
    * lemma it is added to this vector.
    */
@@ -239,9 +248,17 @@ class ConflictConjectureGenerator : public QuantifiersModule
   /** The options for subsolver calls. */
   Options d_subOptions;
 
+  /**
+   * This function prints `prompt` to standard output and reads a 'Y' or 'N'
+   * from the user.  If the user responds with anything other than 'Y' it's
+   * treated as an 'N'.  If the user has indicated 'Y' then we return `true` and
+   * otherwise we return `false`.
+   */
+  bool promptForYesOrNo(std::string prompt) const;
+
   /** Should solve times-right-dist.smt2 instantly. */
   void shortCircuit();
-  
+
   /**
    * The function that inspects the context to build a grammar for conjecture
    * generation.
@@ -260,7 +277,7 @@ class ConflictConjectureGenerator : public QuantifiersModule
   const std::vector<Node>& getGenForEqc(const Node& e);
 
   /**
-   * Given a disequality (an equality currently in the equivalence class of false) it 
+   * Given a disequality (an equality currently in the equivalence class of false) it
    */
   void checkDisequality(const Node& eq);
 
@@ -307,7 +324,7 @@ class ConflictConjectureGenerator : public QuantifiersModule
   void candidateConjecture(const Node& a, const Node& b);
 
   /**
-   * Runs the candidate conjecture clem through all the filters. 
+   * Runs the candidate conjecture clem through all the filters.
    */
   bool filterConjecture(Node clem);
 
@@ -317,7 +334,7 @@ class ConflictConjectureGenerator : public QuantifiersModule
    *
    * @return true if we filter the conjecture a = b.
    */
-  bool filterEmatching(Node a, Node b);
+  bool filterEmatching(Node a, Node b, int& out_tested);
 
   bool filterEmatchingOld(const Node& a, const Node& b);
 
@@ -328,6 +345,12 @@ class ConflictConjectureGenerator : public QuantifiersModule
    */
   bool filterDeductivelyEntailed(const Node& a, const Node& b);
 
+  /**
+   * Calls a subsolver to check whether the proposed conjecture is provable by
+   * induction without conjecture generation.
+   */
+  bool filterProvableWithoutConjectures(const Node& conj);
+  
   /**
    * Currently unused.  I am keeping the code around for reference on how to use
    * the FunDefEvaluator.
@@ -348,6 +371,19 @@ class ConflictConjectureGenerator : public QuantifiersModule
    * terms actually evaluate to the same variable-free term.
    */
   bool filterEvalsToFalse(const Node& lhs, const Node& rhs);
+
+  /**
+   * Let X denote the collection of equivalence class variables that occur free
+   * in either `lhs` or `rhs`.  The following function prints (forall X. lhs ==
+   * rhs) to standard output and asks the user whether the conjecture should be
+   * kept.  If the doesn't want to keep the lemma, this function returns `true`.
+   * Otherwise, i.e. if the user wants to keep the lemma, this function first
+   * asks whether the conflict-based conjecture generator should be switched
+   * off, and then returns `false`.  If the user wants to switch off the
+   * conjecture generator this function sets `d_switched_off` to `true` before
+   * returning.
+   */
+  bool filterManual(const Node conj_body, int tested);
 
   /** I'll document this after I finish writing it. */
   const std::unordered_set<Node> collectRecursivelyDefinedFunctionSymbols(quantifiers::FirstOrderModel* mdl);

@@ -22,7 +22,10 @@ ContextualEnumerator::ContextualEnumerator(Env& env,
 {
 }
 
-ContextualEnumerator::~ContextualEnumerator() {}
+ContextualEnumerator::~ContextualEnumerator() 
+{
+  d_switched_off = false;
+}
 
 bool ContextualEnumerator::needsCheck(Theory::Effort e)
 {
@@ -33,8 +36,15 @@ void ContextualEnumerator::reset_round(Theory::Effort e) {}
 
 void ContextualEnumerator::check(Theory::Effort e, QEffort quant_e)
 {
+  if (d_switched_off)
+  {
+    return;
+  }
+
   if (quant_e == QEFFORT_STANDARD)
   {
+    Trace("ContextualEnumerator::check") << "[Running contextual enumerator]" << std::endl;
+
     // We want to enumerate terms for the operators op_0, ..., op_n and
     // enum_queue is op_0(...), ..., op_n(...).
     std::vector<Node> enum_queue = collectSignatureInformation();
@@ -45,6 +55,8 @@ void ContextualEnumerator::check(Theory::Effort e, QEffort quant_e)
     }
 
     enumerateUf(enum_queue);
+
+    d_switched_off = true;
   }
 }
 

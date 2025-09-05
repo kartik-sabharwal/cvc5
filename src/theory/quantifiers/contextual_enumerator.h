@@ -13,6 +13,7 @@ namespace quantifiers {
 class ContextualEnumerator : public QuantifiersModule
 {
  private:
+  bool d_switched_off;
   bool d_hasAddedLemma;
   std::unordered_set<Node> d_uf_enum;
   std::map<TypeNode, Node> d_typ_pred;

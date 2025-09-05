@@ -82,6 +82,8 @@ class Env
   ~Env();
 
   /* Access to members------------------------------------------------------- */
+  std::ofstream* getInferenceStream() const;
+
   /** Get a pointer to the node manager */
   NodeManager* getNodeManager() const;
 
@@ -356,8 +358,10 @@ class Env
   std::unique_ptr<context::Context> d_context;
   /** User level context owned by this Env */
   std::unique_ptr<context::UserContext> d_userContext;
-  /** Kartik.  This will preserve some formulas that are about to be pre-processed. */
+  /** @Kartik.  This will preserve some formulas that are about to be pre-processed. */
   context::CDList<Node> d_preserved_formulas;
+  /** @Kartik.  This will store a handle to a file to which we'll print our debugging information. */
+  std::ofstream* d_inference_stream;
   /**
    * The proof manager of the solver engine.
    */

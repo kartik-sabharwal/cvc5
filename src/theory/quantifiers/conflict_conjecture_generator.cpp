@@ -53,11 +53,14 @@ ConflictConjectureGenerator::ConflictConjectureGenerator(
       d_conjGenIndex(userContext()),
       d_conjGenCache(userContext())
 {
-  d_shortCircuitCalled = false;
+  d_switched_off = false;
+  d_short_circuited = false;
+  d_iuqf_populated = false;
+  d_iuqf = std::unordered_set<Node>{};
   d_false = nodeManager()->mkConst(false);
 
   d_subOptions.copyValues(options());
-  d_subOptions.write_quantifiers().instMaxRounds = 5;
+  d_subOptions.write_quantifiers().instMaxRounds = 20;
   d_subOptions.write_quantifiers().quantInduction = false;
   d_subOptions.write_quantifiers().dtStcInduction = false;
   d_subOptions.write_quantifiers().conjectureGen = false;
@@ -70,7 +73,9 @@ void ConflictConjectureGenerator::presolve() {}
 
 bool ConflictConjectureGenerator::needsCheck(Theory::Effort e)
 {
-  return e >= Theory::EFFORT_LAST_CALL;
+  // return d_qstate.getInstWhenNeedsCheck(e);
+  // return e >= Theory::EFFORT_LAST_CALL;
+  return true;
 }
 
 void ConflictConjectureGenerator::reset_round(Theory::Effort e) {}
@@ -116,6 +121,7 @@ QuantifiersModule::QEffort ConflictConjectureGenerator::needsModel(
 void ConflictConjectureGenerator::shortCircuit()
 {
   Node plus = Node::null();
+  Node succ = Node::null();
 
   // Search for the first operator with the name "plus".
   {
@@ -131,10 +137,14 @@ void ConflictConjectureGenerator::shortCircuit()
       // op --> i th operator.
       const Node op = term_db->getOperator(i);
 
-      if (op.getName() == "plus")
+      if (op.getName() == "plus" && plus.isNull())
       {
         plus = op;
-        break;
+      }
+
+      if (op.getName() == "S" && succ.isNull())
+      {
+        succ = op;
       }
     }
   }
@@ -144,33 +154,119 @@ void ConflictConjectureGenerator::shortCircuit()
   const TypeNode nat_ty = plus.getType().getRangeType();
 
   // Create three bound variables of the natural number datatype.
-  const Node x = NodeManager::mkBoundVar(nat_ty);
-  const Node y = NodeManager::mkBoundVar(nat_ty);
-  const Node z = NodeManager::mkBoundVar(nat_ty);
+  // const Node x = NodeManager::mkBoundVar("x", nat_ty);
+  // const Node y = NodeManager::mkBoundVar("y", nat_ty);
+  // const Node z = NodeManager::mkBoundVar("z", nat_ty);
 
   // Grab a pointer to the current NodeManager instance.
   NodeManager* node_mgr = nodeManager();
+
+  // Construct the formula
+  //
+  // (forall ((N1 Nat) (N0 Nat) (N2 Nat))
+  //   (= (S (plus (S N0) (plus N1 N2)))
+  //      (plus (S N1) (S (plus N0 N2)))))
+  //
+  // Define the body as follows.
+  //
+  // e0 := e1 = e2
+  // e1 := S(e3)
+  // e3 := plus(e4, e5)
+  // e4 := S(n0)
+  // e5 := plus(n1, n2)
+  // e2 := plus(e6, e7)
+  // e6 := S(n1)
+  // e7 := S(e8)
+  // e8 := plus(n0, n2)
+  // bvs := [n1, n0, n2]
+  // phi := forall bvs. e0
+  // lem := phi or not(phi)
+
+  const Node n0 = NodeManager::mkBoundVar("x", nat_ty);
+  const Node n1 = NodeManager::mkBoundVar("y", nat_ty);
+  const Node n2 = NodeManager::mkBoundVar("z", nat_ty);
+  const Node e8 = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, n0, n2});
+  const Node e7 = node_mgr->mkNode(Kind::APPLY_CONSTRUCTOR, std::vector<Node>{succ, e8});
+  const Node e6 = node_mgr->mkNode(Kind::APPLY_CONSTRUCTOR, std::vector<Node>{succ, n1});
+  const Node e2 = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, e6, e7});
+  const Node e5 = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, n1, n2});
+  const Node e4 = node_mgr->mkNode(Kind::APPLY_CONSTRUCTOR, std::vector<Node>{succ, n0});
+  const Node e3 = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, e4, e5});
+  const Node e1 = node_mgr->mkNode(Kind::APPLY_CONSTRUCTOR, std::vector<Node>{succ, e3});
+  const Node e0 = node_mgr->mkNode(Kind::EQUAL, std::vector<Node>{e1, e2});
+  const Node bvs = node_mgr->mkNode(Kind::BOUND_VAR_LIST, std::vector<Node>{n1, n0, n2});
+  const Node phi = node_mgr->mkNode(Kind::FORALL, bvs, e0);
+
+  // (forall ((n0 Nat) (n1 Nat) (n2 Nat))
+  //   (= (plus n0 (plus n1 n2)) (plus n1 (plus n0 n2))))
+  //
+  // g0 := g1 = g2
+  // g1 := plus(n0, g3)
+  // g3 := plus(n1, n2)
+  // g2 := plus(n1, g4)
+  // g4 := plus(n0, n2)
+  // alt_bvs := [n0, n1, n2]
+  // psi := forall bvs. g0
+  // alt_lem := phi or not(phi)
   
-  // Construct phi.
-  // pbl --> left hand of body of phi.
-  const Node pbl = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, x, node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, y, z})});
-  // pbr --> right hand of body of phi.
-  const Node pbr = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, z, node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, x, y})});
-  // pb --> body of phi.
-  const Node pb = pbl.eqNode(pbr);
-  const Node phi = node_mgr->mkNode(Kind::FORALL, std::vector<Node>{node_mgr->mkNode(Kind::BOUND_VAR_LIST, std::vector<Node>{x, y, z}), pb});
+  const Node g4 = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, n0, n2});
+  const Node g2 = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, n1, g4});
+  const Node g3 = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, n1, n2});
+  const Node g1 = node_mgr->mkNode(Kind::APPLY_UF, std::vector<Node>{plus, n0, g3});
+  const Node g0 = node_mgr->mkNode(Kind::EQUAL, std::vector<Node>{g1, g2});
+  const Node alt_bvs = node_mgr->mkNode(Kind::BOUND_VAR_LIST, std::vector<Node>{n0, n1, n2});
+  const Node psi = node_mgr->mkNode(Kind::FORALL, alt_bvs, g0);
 
-  // Construct lem.
-  const Node lem = phi.orNode(phi.negate());
+  // Ask the user which lemma should be sent to the solver.
+  Node choice = Node::null();
+  std::cout << "Which conjecture should the short-circuiting function send?" << std::endl << "1. " << phi << std::endl << "2. " << psi << std::endl << "[1/2]: ";
+  {
+    std::string resp;
+    std::getline(std::cin, resp);
+    Assert(resp.size() > 0);
+    if (resp[0] == '1')
+    {
+      choice = phi;
+    }
+    else if (resp[0] == '2')
+    {
+      choice = psi;
+    }
+  }
+  // Make sure the user has actually chosen something.
+  Assert(!choice.isNull());
 
-  // Send lem.
-  d_qim.addPendingLemma(lem, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
-
-  // Add a phase requirement.
-  d_qim.addPendingPhaseRequirement(phi, false);
-
+  // Now let's ask the user if they want to send just the positive version of
+  // the lemma, or just send its negation.  Needless to say this is unsound.
+  // The third option is to send the full splitting lemma, which is sound.
+  std::cout << "What should we do?" << std::endl << "[0: Assume conjecture | 1: Prove conjecture | 2: Send splitting lemma] ";
+  {
+    std::string resp;
+    std::getline(std::cin, resp);
+    if (resp.size() > 0 && resp[0] == '0')
+    {
+    }
+    else if (resp.size() > 0 && resp[0] == '1')
+    {
+      choice = choice.negate();
+    }
+    else if (resp.size() > 0 && resp[0] == '2')
+    {
+      choice = choice.orNode(choice.negate());
+    }
+    else
+    {
+      Assert(false);
+    }
+  }
+  std::cout << "Sending " << choice << std::endl;
+  
+  // const Node lem = choice.orNode(choice.negate());
+  d_qim.addPendingLemma(choice, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
+  // d_qim.addPendingPhaseRequirement(choice, false);
+  
   // Let's 'remember' that we've called `shortCircuit()` once.  We don't need to call it multiple times.
-  d_shortCircuitCalled = true;
+  d_short_circuited = true;
   
   return;
 }
@@ -182,14 +278,50 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     return;
   }
 
-  // `shortCircuit()` will ensure that the correct lemma for
-  // times-right-dist.smt2 is sent to the solver.  This is a sanity check to
-  // ensure that the process of adding the correct splitting lemma and phase
-  // requirement induces an 'unsat' response from the solver.  We return
-  // immediately after.
-  // if (!d_shortCircuitCalled)
+  quantifiers::FirstOrderModel* model = d_treg.getModel();
+
+  if (d_switched_off)
+  {
+    return;
+  }
+
+  // If `d_iuqf` hasn't been populated, populate it.
+  if (d_iuqf_populated)
+  {
+    // Go over all universally quantified formulas and print the ones that aren't in `d_iuqf`.
+    std::ofstream& inference_stream = *d_env.getInferenceStream();
+    inference_stream << "(new-quantified-formulas";
+    // n_aqfs is 'number of asserted quantified formulas'.
+    size_t naq = model->getNumAssertedQuantifiers();
+    for (size_t i = 0; i < naq; i++)
+    {
+      Node phi = model->getAssertedQuantifier(i);
+
+      // is_phi_init is 'is phi in the initial set of  universally quantified formulas?'
+      bool is_phi_init = d_iuqf.find(phi) != d_iuqf.end();
+
+      if (!is_phi_init)
+      {
+        inference_stream << std::endl << phi;
+      }
+    }
+    inference_stream << std::endl << ")" << std::endl;
+  }
+  else
+  {
+    size_t naq = model->getNumAssertedQuantifiers();
+    for (size_t i = 0; i < naq; i++)
+    {
+      Node phi = model->getAssertedQuantifier(i);
+      d_iuqf.insert(phi);
+    }    
+
+    d_iuqf_populated = true;
+  }
+
+  // if (!d_short_circuited)
   // {
-  //   shortCircuit();    
+  //   shortCircuit();
   // }
   // return;
   
@@ -197,7 +329,6 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
   
   // update the function definitions
   d_funDefEvaluator.clear();
-  quantifiers::FirstOrderModel* model = d_treg.getModel();
   Trace("ccgen-debug") << "Refresh function definitions..." << std::endl;
   std::unordered_set<Node> qsyms;
   std::unordered_set<TNode> qvisited;
@@ -283,6 +414,9 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     Trace("ccgen-lemma") << "ConflictConjectureGenerator: send lemma " << case_split
                          << std::endl;
     d_qim.addPendingLemma(case_split, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
+
+    // Setting this module as the owner of `lem` should stop other quantifiers modules from attempting to instantiate it.
+    d_qreg.setOwner(lem, this);
 
     // We need to try a proof by induction.  So we do the following to trigger
     // skolemization with inductive strengthening.
@@ -752,7 +886,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   // This is the number of expansions we will perform.  Since performing such an
   // expansion is equivalent to taking one step in the random walk, it can be
   // seen as the intended length of our random walk.
-  size_t depth = 5;
+  size_t depth = 10;
 
   // The vertex we are currently at in the random walk.  It's initially v
   // because our random walk starts at v.
@@ -1521,6 +1655,12 @@ void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
 
 bool ConflictConjectureGenerator::filterConjecture(Node clem)
 {
+  // We must ignore this conjecture if the generator has been switched off.
+  if (d_switched_off)
+  {
+    return true;
+  }
+
   Trace("cconjGen") << "(list \"filter\" (quote " << clem << ")";
   
   Trace("cconj-filter") << "Candidate conjecture : " << clem[0]
@@ -1553,21 +1693,21 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
     }
   }
 
-  Trace("ConflictConjectureGenerator::filterConjecture")
-      << "Calling filterEmatching() >>>>>" << std::endl;
-  const bool discard = filterEmatching(a, b);
-  Trace("ConflictConjectureGenerator::filterConjecture") << "<<<<< Called filterEmatching()" << std::endl;
-  Trace("cconj-filter") << "Try filter based on E-matching" << std::endl;
-  if (discard)
-  {
-    Trace("cconj-filter") << "...filtered based on E-matching" << std::endl;
-    Trace("cconjGen") << " (list \"e-matching\" #f))" << std::endl;
-    return true;
-  }
-  else
-  {
-    Trace("cconjGen") << " (list \"e-matching\" #t)";
-  }
+  int tested = 0;
+
+  // const bool discard = filterEmatching(a, b, tested);
+
+  // Trace("cconj-filter") << "Try filter based on E-matching" << std::endl;
+  // if (discard)
+  // {
+  //   Trace("cconj-filter") << "...filtered based on E-matching" << std::endl;
+  //   Trace("cconjGen") << " (list \"e-matching\" #f))" << std::endl;
+  //   return true;
+  // }
+  // else
+  // {
+  //   Trace("cconjGen") << " (list \"e-matching\" #t)";
+  // }
 
   Trace("cconj-filter") << "Try filter based on deductively entailed"
                         << std::endl;
@@ -1583,40 +1723,53 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
     Trace("cconjGen") << " (list \"entailment\" #t)";
   }
 
+  if (filterProvableWithoutConjectures(clem))
+  {
+    return true;
+  }
+
+  if (filterManual(clem, tested))
+  {
+    return true;
+  }
+
   Trace("cconjGen") << ")" << std::endl;
   
   return false;
 }
 
-bool ConflictConjectureGenerator::filterEmatching(Node lhs, Node rhs)
+/**
+ * Both `lhs` and `rhs` are expansions.  (Recall that all expansions are built
+ * from user-declared function symbols, constructor symbols, and equivalence
+ * class variables.)  We assume that `lhs` is the left-hand side of a candidate
+ * equality conjecture while `rhs` is its right-hand side.  We also assume that
+ * every equivalence class variable that occurs in `rhs` also occurs in `lhs`.
+ * Let 'X' be the set of equivalence class variables that occur in `lhs`.  We
+ * want to check whether the following conjecture evaluates to false on some
+ * substitution of terms from the term database.
+ *
+ * forall X. lhs = rhs
+ *
+ * Since `lhs` contains equivalence class variables it can be treated as a
+ * pattern for e-matching.  For each equivalence class representative `rep`, we
+ * scan `rep`'s equivalence class for terms `t` that match the pattern `lhs`.
+ * In other words we search for substitutions `subs` over X such that (`lhs` *
+ * `subs`) is equivalent to `rep`.  (Since X subsumes the equivalence class
+ * variables of `rhs` we can be sure that (`rhs` * `subs`) is also a ground
+ * term.)  Then we check whether (`lhs` * `subs`) and (`rhs` * `subs`) are in
+ * the same equivalence class.  If there is at least one substitution for which
+ * they are in different equivalence classes, we return true to signal that the
+ * candidate conjecture should be discarded.  We want to test with as many
+ * substitutions as we can.
+ *
+ * I've added on a new argument `out_tested`, short for 'output tested'.  This
+ * function has a local variable named `tested` that counts how many
+ * substitutions we've tested the conjecture with.  Just before returning from
+ * this function we test `out_tested` to the value of `tested` so that we can
+ * share it with the caller.
+ */
+bool ConflictConjectureGenerator::filterEmatching(Node lhs, Node rhs, int& out_tested)
 {
-  // Both `lhs` and `rhs` are expansions.  (Recall that all expansions
-  // are built from user-declared function symbols, constructor
-  // symbols, and equivalence class variables.)  We assume that `lhs`
-  // is the left-hand side of a candidate equality conjecture while
-  // `rhs` is its right-hand side.  We also assume that every
-  // equivalence class variable that occurs in `rhs` also occurs in
-  // `lhs`.  Let 'X' be the set of equivalence class variables that
-  // occur in `lhs`.  We want to check whether the following
-  // conjecture evaluates to false on some substitution of terms from
-  // the term database.
-  //
-  // forall X. lhs = rhs
-  //
-  // Since `lhs` contains equivalence class variables it can be
-  // treated as a pattern for e-matching.  For each equivalence class
-  // representative `rep`, we scan `rep`'s equivalence class for terms
-  // `t` that match the pattern `lhs`.  In other words we search for
-  // substitutions `subs` over X such that (`lhs` * `subs`) is
-  // equivalent to `rep`.  (Since X subsumes the equivalence class
-  // variables of `rhs` we can be sure that (`rhs` * `subs`) is also a
-  // ground term.)  Then we check whether (`lhs` * `subs`) and (`rhs`
-  // * `subs`) are in the same equivalence class.  If there is at
-  // least one substitution for which they are in different
-  // equivalence classes, we return true to signal that the candidate
-  // conjecture should be discarded.  We want to test with as many
-  // substitutions as we can.
-
   // We assume that `lhs` has an operator.  Clearly this assumption
   // would make us reject the following reasonable conjectures.
   //
@@ -1873,7 +2026,15 @@ bool ConflictConjectureGenerator::filterEmatching(Node lhs, Node rhs)
     }
   }
 
+  // We didn't find any substitutions on which to evaluate the conjecture.
+  if (tested == 0)
+  {
+    return true;
+  }
+
   Trace("ccgen-filterEmatching") << "Tested " << tested << " substitutions, " << confirmed << " confirmed" << std::endl;
+
+  out_tested = tested;
   
   return false;
 }
@@ -2238,6 +2399,13 @@ void ConflictConjectureGenerator::setUpFunDefEvaluator()
 {
   const CDList<Node>& preserved_formulas = d_env.getPreservedFormulas();
 
+  Trace("setUpFunDefEvaluator") << "(preserved-formulas" << std::endl;
+  for (const Node& phi : preserved_formulas)
+  {
+    Trace("setUpFunDefEvaluator") << phi << std::endl;
+  }
+  Trace("setUpFunDefEvaluator") << ")" << std::endl;
+  
   // Organize preserved formulas by head symbol.  Each preserved formula is
   // expected to have the form:
   // 
@@ -2700,11 +2868,187 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
   return false;
 }
 
+/**
+ * `filterManual()` expects two inputs.  The first is the body of a candidate
+ * conjecture.  The second is the number of substitutions with which the
+ * conjecture has been confirmed.  We print the candidate conjecture for the
+ * user and ask if it should be considered.  If it should, we ask if it should
+ * be assumed or it should be proved.  We also ask if the conjecture generator
+ * should be turned off after.  On the other hand if we choose to ignore the
+ * conjecture we return `true`, as in 'yes, throw away this conjecture', and
+ * leave it at that.
+ * 
+ * Let's expand all the abbreviated variable names in this function.  conj_body
+ * is 'body of conjecture', fvs_set is 'free variables as a set', fvs is 'free
+ * variables', bvs is 'bound variables', and conj is 'conjecture'.
+ */
+bool ConflictConjectureGenerator::filterManual(const Node conj_body, int tested)
+{
+  NodeManager* node_mgr = nodeManager();
+
+  // Construct the universally quantified conjecture from the conjecture's body.
+  std::unordered_set<Node> fvs_set{};
+  expr::getFreeVariables(conj_body, fvs_set);
+  std::vector<Node> fvs{};
+  fvs.insert(fvs.end(), fvs_set.begin(), fvs_set.end());
+  const Node bvs = node_mgr->mkNode(Kind::BOUND_VAR_LIST, fvs);
+  Node lem = node_mgr->mkNode(Kind::FORALL, bvs, conj_body);
+
+  // Keep conjecture?
+  {
+    // pb --> 'prompt builder'.
+    std::ostringstream pb;
+    pb << "Should the following conjecture with score " << tested << " be kept?" << std::endl << lem << std::endl << "[Y/N]: ";
+    
+    if (!promptForYesOrNo(pb.str()))
+    {
+      // User said 'no' so discard the conjecture.
+      return true;
+    }
+  }
+
+  // Transform conjecture?
+  {
+    std::cout << "What should we do?" << std::endl << "[0: Assume conjecture | 1: Prove conjecture | 2: Send splitting lemma] ";
+
+    std::string resp;
+    std::getline(std::cin, resp);
+
+    if (resp.size() > 0 && resp[0] == '0')
+    {
+    }
+    else if (resp.size() > 0 && resp[0] == '1')
+    {
+      lem = lem.negate();
+    }
+    else if (resp.size() > 0 && resp[0] == '2')
+    {
+      lem = lem.orNode(lem.negate());
+    }
+    else
+    {
+      Assert(false);
+    }
+  }
+  
+  // Assume conjecture?
+  // {
+  //   std::ostringstream pb;
+  //   pb << "Should we assume that the conjecture holds?  Otherwise we'll try to prove it. " << std::endl << "[Y/N]: ";
+
+  //   if (!promptForYesOrNo(pb.str()))
+  //   {
+  //     // User wants us to prove the conjecture, so let's negate it.
+  //     lem = lem.negate();
+  //   }
+  // }
+
+  // Turn off generator?
+  {
+    std::ostringstream pb;
+    pb << "Should we turn off the conjecture generator?" << std::endl << "[Y/N]: ";
+
+    if(promptForYesOrNo(pb.str()))
+    {
+      d_switched_off = true;
+
+      std::ofstream* inference_stream = d_env.getInferenceStream();
+      (*inference_stream) << "********************************************************************************" << std::endl;
+    }
+  }
+
+  // Send lemma with no phase requirement.
+  d_qim.addPendingLemma(lem, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
+
+  // Discard the conjecture unconditionally.
+  return true;
+}
+
+bool ConflictConjectureGenerator::promptForYesOrNo(std::string prompt) const
+{
+  // Print the prompt to standard output.
+  std::cout << prompt;
+
+  // Read a line from standard input.
+  std::string resp_str;
+  std::getline(std::cin, resp_str);
+
+  // Use the user's response string to determine the response boolean.
+  bool resp = false;
+  if (resp_str.size() > 0 && resp_str[0] == 'Y')
+  {
+    resp = true;
+  }
+
+  return resp;
+}
+
+bool ConflictConjectureGenerator::filterProvableWithoutConjectures(const Node& conj_body)
+{
+  // std::unique_ptr<SolverEngine> dentChecker;
+  // SubsolverSetupInfo ssi(d_env, d_subOptions);
+  // initializeSubsolver(d_env.getNodeManager(), dentChecker, ssi, true, 100);
+  // quantifiers::FirstOrderModel* model = d_treg.getModel();
+  // for (size_t i = 0; i < model->getNumAssertedQuantifiers(); i++)
+  // {
+  //   Node phi = model->getAssertedQuantifier(i);
+  //   dentChecker->assertFormula(phi);
+  // }
+  // Node lem = a.eqNode(b);
+  // std::unordered_set<Node> fvs;
+  // expr::getFreeVariables(lem, fvs);
+  // std::vector<Node> bvs(fvs.begin(), fvs.end());
+  // if (!bvs.empty())
+  // {
+  //   NodeManager* nm = nodeManager();
+  //   lem = nm->mkNode(Kind::FORALL, nm->mkNode(Kind::BOUND_VAR_LIST, bvs), lem);
+  // }
+  // lem = lem.notNode();
+  // dentChecker->assertFormula(lem);
+  // Trace("cconj-filter") << "Check with subsolver" << std::endl;
+  // Result r = dentChecker->checkSat();
+  // Trace("cconj-filter") << "  ...got : " << r << std::endl;
+  // return (r.getStatus() == Result::UNSAT);
+
+  std::unique_ptr<SolverEngine> induction_prover;
+
+  Options ind_prov_opts;
+  ind_prov_opts.copyValues(d_subOptions);
+  d_subOptions.write_quantifiers().dtStcInduction = true;
+  smt::SetDefaults::disableChecking(ind_prov_opts);
+
+  SubsolverSetupInfo ssi(d_env, ind_prov_opts);
+
+  initializeSubsolver(d_env.getNodeManager(), induction_prover, ssi, true);
+
+  quantifiers::FirstOrderModel* model = d_treg.getModel();
+  for (size_t i = 0; i < model->getNumAssertedQuantifiers(); i++)
+  {
+    const Node phi = model->getAssertedQuantifier(i);
+    induction_prover->assertFormula(phi);
+  }
+
+  NodeManager* node_mgr = nodeManager();
+  std::unordered_set<Node> fvs_set{};
+  expr::getFreeVariables(conj_body, fvs_set);
+  std::vector<Node> fvs{};
+  fvs.insert(fvs.end(), fvs_set.begin(), fvs_set.end());
+  const Node bvs = node_mgr->mkNode(Kind::BOUND_VAR_LIST, fvs);
+  Node lem = node_mgr->mkNode(Kind::FORALL, bvs, conj_body);
+  lem = lem.negate();
+
+  induction_prover->assertFormula(lem);
+  
+  Result r = induction_prover->checkSat();
+  Trace("filterProvable") << "(induction " << lem << " " << r << ")" << std::endl;
+
+  return (r.getStatus() == Result::UNKNOWN);
+}
+
 const Node& Decision::getPat()
 {
   return d_pat;  
 }
-
 
 /**
  * This is the constructor for the `Decision` class.  As stated in the header

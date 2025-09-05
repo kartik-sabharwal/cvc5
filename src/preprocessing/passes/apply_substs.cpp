@@ -61,6 +61,8 @@ PreprocessingPassResult ApplySubsts::applyInternal(
     // Only delve deeper if the formula is annotated.
     if (phi.getNumChildren() == 3)
     {
+      Trace("preserveFormula") << "(annotated-formula " << phi << ")" << std::endl;
+
       const Node& anns = phi[2];
 
       // Find the first child of the annotations node that has the

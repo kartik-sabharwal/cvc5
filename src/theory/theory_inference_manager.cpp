@@ -15,6 +15,7 @@
 
 #include "theory/theory_inference_manager.h"
 
+#include <chrono>
 #include "options/proof_options.h"
 #include "proof/eager_proof_generator.h"
 #include "proof/trust_id.h"
@@ -137,8 +138,24 @@ void TheoryInferenceManager::trustedConflict(TrustNode tconf, InferenceId id)
       << "Must provide an inference id for conflict";
   d_conflictIdStats << id;
   resourceManager()->spendResource(id);
-  Trace("im") << "(conflict " << id << " " << tconf.getProven() << ")"
-              << std::endl;
+  // @Kartik.  Let's print the system time along with the lemma in question.
+  {
+    // time_pt --> time point.
+    typedef std::chrono::time_point<std::chrono::system_clock> time_pt;
+    const time_pt now = std::chrono::system_clock::now();
+    // now_conv --> converted value of `now`.
+    const std::time_t now_conv = std::chrono::system_clock::to_time_t(now);
+    // out_str --> a string output stream.
+    std::ostringstream out_str{};
+    out_str << std::ctime(&now_conv);
+    // time_str --> time as a newline-terminated string.
+    std::string time_str = out_str.str();
+    // time_str is no longer newline-terminated.
+    time_str.pop_back();
+    std::ofstream* inference_stream = d_env.getInferenceStream();
+    (*inference_stream) << "(" << time_str << ") " << "(conflict " << id << " " << tconf.getProven() << ")" << std::endl;
+  }
+  Trace("im") << "(conflict " << id << " " << tconf.getProven() << ")" << std::endl;
   d_out.trustedConflict(tconf, id);
   ++d_numConflicts;
 }
@@ -271,7 +288,26 @@ bool TheoryInferenceManager::trustedLemma(const TrustNode& tlem,
       << "Must provide an inference id for lemma";
   d_lemmaIdStats << id;
   resourceManager()->spendResource(id);
-  Trace("im") << "(lemma " << id << " " << tlem.getProven() << ")" << std::endl;
+
+  // @Kartik.  Let's print the system time along with the lemma in question.
+  {
+    // time_pt --> time point.
+    typedef std::chrono::time_point<std::chrono::system_clock> time_pt;
+    const time_pt now = std::chrono::system_clock::now();
+    // now_conv --> converted value of `now`.
+    const std::time_t now_conv = std::chrono::system_clock::to_time_t(now);
+    // out_str --> a string output stream.
+    std::ostringstream out_str{};
+    out_str << std::ctime(&now_conv);
+    // time_str --> time as a newline-terminated string.
+    std::string time_str = out_str.str();
+    // time_str is no longer newline-terminated.
+    time_str.pop_back();
+    std::ofstream* inference_stream = d_env.getInferenceStream();
+    (*inference_stream) << "(" << time_str << ") (lemma " << id << " " << tlem.getProven() << ")" << std::endl;
+    Trace("im") << "(" << time_str << ") (lemma " << id << " " << tlem.getProven() << ")" << std::endl;
+  }
+
   // shouldn't send trivially true or false lemmas
   Assert(!rewrite(tlem.getProven()).isConst());
   d_numCurrentLemmas++;
@@ -398,6 +434,23 @@ bool TheoryInferenceManager::processInternalFact(TNode atom,
   resourceManager()->spendResource(iid);
   // make the node corresponding to the explanation
   Node expn = nodeManager()->mkAnd(exp);
+  // @Kartik.  Let's print the system time along with the lemma in question.
+  {
+    // time_pt --> time point.
+    typedef std::chrono::time_point<std::chrono::system_clock> time_pt;
+    const time_pt now = std::chrono::system_clock::now();
+    // now_conv --> converted value of `now`.
+    const std::time_t now_conv = std::chrono::system_clock::to_time_t(now);
+    // out_str --> a string output stream.
+    std::ostringstream out_str{};
+    out_str << std::ctime(&now_conv);
+    // time_str --> time as a newline-terminated string.
+    std::string time_str = out_str.str();
+    // time_str is no longer newline-terminated.
+    time_str.pop_back();
+    std::ofstream* inference_stream = d_env.getInferenceStream();
+    (*inference_stream) << "(" << time_str << ") " << "(fact " << iid << " " << (pol ? Node(atom) : atom.notNode()) << " " << expn << ")" << std::endl;
+  }
   Trace("im") << "(fact " << iid << " " << (pol ? Node(atom) : atom.notNode())
               << " " << expn << ")" << std::endl;
   // call the pre-notify fact method with preReg = false, isInternal = true

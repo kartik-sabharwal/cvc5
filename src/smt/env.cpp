@@ -59,6 +59,10 @@ Env::Env(NodeManager* nm, const Options* opts)
       d_uninterpretedSortOwner(theory::THEORY_UF),
       d_boolTermSkolems(d_userContext.get())
 {
+  // @Kartik.
+  d_inference_stream = new std::ofstream("cvc5-inferences.out", std::ios::app);
+  // ********
+
   if (opts != nullptr)
   {
     d_options.copyValues(*opts);
@@ -102,7 +106,14 @@ void Env::shutdown()
   d_rewriter.reset(nullptr);
   // d_resourceManager must be destroyed before d_statisticsRegistry
   d_resourceManager.reset(nullptr);
+
+  // @Kartik.
+  d_inference_stream->close();
+  delete d_inference_stream;
+  // ********
 }
+
+std::ofstream* Env::getInferenceStream() const { return d_inference_stream; };
 
 context::Context* Env::getContext() { return d_context.get(); }
 
