@@ -685,6 +685,14 @@ name   = "Quantifiers"
 ### Finite model finding options
 
 [[option]]
+  name       = "unroll"
+  category   = "expert"
+  long       = "unroll=N"
+  type       = "int64_t"
+  default    = "0"
+  help       = "number of times to unroll recursive function definitions"
+
+[[option]]
   name       = "finiteModelFind"
   category   = "regular"
   long       = "finite-model-find"

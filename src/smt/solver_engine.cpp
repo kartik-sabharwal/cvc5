@@ -26,6 +26,7 @@
 #include "expr/non_closed_node_converter.h"
 #include "expr/plugin.h"
 #include "expr/skolem_manager.h"
+#include "expr/subs.h"
 #include "expr/subtype_elim_node_converter.h"
 #include "expr/sygus_term_enumerator.h"
 #include "options/base_options.h"
@@ -620,6 +621,18 @@ void SolverEngine::defineFunctionsRec(
       func_app = nm->mkNode(Kind::APPLY_UF, children);
     }
     Node lem = nm->mkNode(Kind::EQUAL, func_app, formulas[i]);
+
+    const int64_t n_unroll = d_env->getOptions().quantifiers.unroll;
+    if (n_unroll > 0)
+    {
+      lem = nm->mkNode(Kind::EQUAL,
+                       func_app,
+                       unroll(funcs[i], formals[i], formulas[i], n_unroll));
+
+      Trace("SolverEngine::defineFunctionsRec")
+          << "(unrolled " << lem << ")" << std::endl;
+    }
+    
     if (!formals[i].empty())
     {
       // set the attribute to denote this is a function definition
@@ -2335,6 +2348,372 @@ const Options& SolverEngine::getOptions() const { return d_env->getOptions(); }
 ResourceManager* SolverEngine::getResourceManager() const
 {
   return d_env->getResourceManager();
+}
+
+SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, const std::vector<Node> formals, const Node formula)
+{
+  const TypeNode func_typ = func.getType().getRangeType();
+
+  size_t n_calls = 0;
+  std::vector<Node> calls;
+  std::vector<Node> abs_vars;
+
+  enum JobKind { MAKE, BREAK };
+
+  struct Job
+  {
+    const JobKind d_job_kind;
+    const Node d_expr;
+    const kind::MetaKind d_metakind;
+    const Kind d_kind;
+    const size_t d_num_pop;
+  };
+
+  std::vector<Job*> jobs;
+  std::vector<Node> results;
+
+  jobs.push_back(new Job{
+      BREAK,
+      formula,
+      kind::metakind::INVALID,
+      Kind::UNDEFINED_KIND,
+      0});
+
+  NodeManager* node_mgr = d_env->getNodeManager();
+  
+  while (!jobs.empty())
+  {
+    Job* job = jobs.back();
+    jobs.pop_back();
+
+    switch (job->d_job_kind)
+    {
+      case BREAK:
+      {
+        const Node expr = job->d_expr;
+
+        switch (expr.getMetaKind())
+        {
+          case kind::metakind::PARAMETERIZED:
+          {
+            const Kind expr_kind = expr.getKind();
+            const Node expr_op = expr.getOperator();
+
+            if (expr_kind == Kind::APPLY_UF && expr_op == func)
+            {
+              std::ostringstream name;
+              name << "h" << n_calls;
+
+              Node abs_var = node_mgr->mkBoundVar(name.str(), func_typ);
+
+              calls.push_back(expr);
+
+              abs_vars.push_back(abs_var);
+
+              results.push_back(abs_var);
+
+              ++n_calls;
+            }
+            else
+            {
+              const size_t n_children = expr.getNumChildren();
+
+              jobs.push_back(new Job{
+                  MAKE,
+                  Node::null(),
+                  kind::metakind::PARAMETERIZED,
+                  expr_kind,
+                  n_children + 1});
+
+              jobs.push_back(new Job{
+                  BREAK,
+                  expr_op,
+                  kind::metakind::INVALID,
+                  Kind::UNDEFINED_KIND,
+                  0});
+
+              for (size_t i = 0; i < n_children; ++i)
+              {
+                jobs.push_back(new Job{
+                    BREAK,
+                    expr[i],
+                    kind::metakind::INVALID,
+                    Kind::UNDEFINED_KIND,
+                    0});
+              }
+            }
+
+            break;
+          }
+
+          case kind::metakind::OPERATOR:
+          {
+            const size_t n_children = expr.getNumChildren();
+
+            jobs.push_back(new Job{
+                MAKE,
+                Node::null(),
+                kind::metakind::OPERATOR,
+                expr.getKind(),
+                n_children});
+
+            for (size_t i = 0; i < n_children; ++i)
+            {
+              jobs.push_back(new Job{
+                  BREAK,
+                  expr[i],
+                  kind::metakind::INVALID,
+                  Kind::UNDEFINED_KIND,
+                  0});
+            }
+
+            break;
+          }
+
+          case kind::metakind::CONSTANT:
+          case kind::metakind::VARIABLE:
+          {
+            results.push_back(expr);
+
+            break;
+          }
+
+          default:
+          {
+            Assert(false);
+            break;
+          }
+        }
+
+        break;
+      }
+
+      case MAKE:
+      {
+        const Kind expr_kind = job->d_kind;
+
+        std::vector<Node> args;
+        
+        for (size_t i = 0; i < job->d_num_pop; i++)
+        {
+          args.push_back(results.back());
+          results.pop_back();
+        }
+
+        // Trace("SolverEngine::makeAbstraction") << "(" << expr_kind;
+        // for (size_t i = 0; i < job->d_num_pop; i++)
+        // {
+        //   Trace("SolverEngine::makeAbstraction") << " " << args[i];
+        // }
+        // Trace("SolverEngine::makeAbstraction") << ")" << std::endl;
+
+        const Node result = node_mgr->mkNode(expr_kind, args);
+        
+        results.push_back(result);
+
+        break;
+      }
+
+      default:
+      {
+        Assert(false);
+        break;
+      }
+    }
+
+    delete job; 
+  }
+
+  const Node result = results.back();
+  results.pop_back();
+
+  if (TraceIsOn("SolverEngine::makeAbstraction"))
+  {
+    std::ostringstream msg;
+
+    msg << "(";
+    msg << "(abstraction " << result << ")";
+    msg << " (calls";
+    for (size_t i = 0; i < n_calls; ++i)
+    {
+      msg << " (";
+      msg << i << " . " << calls[i];
+      msg << ")";
+    }
+    msg << ")";
+    msg << " (variables";
+    for (size_t i = 0; i < n_calls; ++i)
+    {
+      msg << " (";
+      msg << i << " . " << abs_vars[i];
+      msg << ")";
+    }
+    msg << ")";
+    msg << ")" << std::endl;
+
+    Trace("SolverEngine::makeAbstraction") << msg.str();
+  }
+  
+  return SolverEngine::AbstractionData{result, abs_vars, n_calls, calls};
+}
+
+Node SolverEngine::unroll(const Node func, const std::vector<Node> formals, const Node formula, const size_t count)
+{
+  AbstractionData abs_dat = makeAbstraction(func, formals, formula);
+  
+  const Node body = std::get<0>(abs_dat);
+  const std::vector<Node> vars = std::get<1>(abs_dat);
+  const size_t n_calls = std::get<2>(abs_dat);
+  const std::vector<Node> calls = std::get<3>(abs_dat);
+
+  Assert(vars.size() == calls.size() && calls.size() == n_calls);
+
+  std::vector<Subs> xforms;
+  for (const Node& a_call : calls)
+  {
+    Subs xform;
+
+    Assert(a_call.getNumChildren() == formals.size());
+
+    for (size_t i = 0; i < a_call.getNumChildren(); ++i)
+    {
+      xform.add(formals[i], a_call[i]);
+    }
+
+    xforms.push_back(xform);
+  }
+
+  enum JobKind
+  {
+    UNROLL,
+    COMBINE
+  };
+
+  struct Job
+  {
+    const JobKind d_job_kind;
+    const size_t d_count;
+    Subs d_xform;
+  };
+
+  std::vector<Job*> jobs;
+  std::vector<Node> results;
+
+  Subs id;
+  for (const Node& x : formals)
+  {
+    id.add(x, x);
+  }
+
+  jobs.push_back(new Job{UNROLL, count, id});
+
+  NodeManager* node_mgr = d_env->getNodeManager();
+  
+  while (!jobs.empty())
+  {
+    if (TraceIsOn("SolverEngine::unroll"))
+    {
+      std::ostringstream msg;
+      
+      msg << "(jobs";
+      for (const Job* job : jobs)
+      {
+        msg << " (job " << (job->d_job_kind == UNROLL ? "UNROLL" : "COMBINE")
+            << " " << job->d_count << " " << (job->d_xform).toString() << ")";
+      }
+      msg << ")" << std::endl;
+
+      msg << "(results";
+      for (const Node& res : results)
+      {
+        msg << " " << res; 
+      }
+      msg << ")" << std::endl;
+
+      Trace("SolverEngine::unroll") << msg.str();
+    }
+
+    Job* job = jobs.back();
+    jobs.pop_back();
+
+    switch (job->d_job_kind)
+    {
+      case UNROLL:
+      {
+        // cnt --> count, so as not to shadow the argument of the same name.
+        const size_t cnt = job->d_count;
+        const Subs& job_xform = job->d_xform;
+        
+        if (cnt == 0)
+        {
+          std::vector<Node> args;
+          args.push_back(func);
+          for (const Node& x : formals)
+          {
+            args.push_back(job_xform.apply(x));
+          }
+
+          const Node result = node_mgr->mkNode(Kind::APPLY_UF, args);
+
+          results.push_back(result);
+        }
+        else
+        {
+          jobs.push_back(new Job{COMBINE, 0, job_xform});
+
+          for (size_t i = 0; i < n_calls; ++i)
+          {
+            Subs next_xform;
+            next_xform.append(xforms[i]);
+            job_xform.applyToRange(next_xform);
+
+            jobs.push_back(new Job{UNROLL, cnt - 1, next_xform});
+          }
+        }
+
+        break;
+      }
+
+      case COMBINE:
+      {
+        Subs& job_xform = job->d_xform;
+
+        Subs concretes;
+        for (size_t i = 0; i < n_calls; ++i)
+        {
+          const Node concrete = results.back();
+          results.pop_back();
+
+          concretes.add(vars[i], concrete);
+        }
+        concretes.append(job_xform);
+
+        const Node result = concretes.apply(body);
+
+        Trace("SolverEngine::unroll") << "(combine " << concretes << " " << body
+                                      << " " << result << ")" << std::endl;
+
+        results.push_back(result);
+
+        break;
+      }
+
+      default:
+      {
+        Assert(false);
+        break;
+      }
+    }
+
+    delete job;
+  }
+
+  const Node result = results.back();
+  results.clear();
+
+  Trace("SolverEngine::unroll") << "(unroll " << result << ")" << std::endl;
+
+  return result;
 }
 
 }  // namespace cvc5::internal

@@ -1075,6 +1075,12 @@ class CVC5_EXPORT SolverEngine
                   modes::ProofFormat proofFormat,
                   const std::map<Node, std::string>& assertionNames);
 
+  typedef std::tuple<Node, std::vector<Node>, size_t, std::vector<Node>> AbstractionData;
+
+  AbstractionData makeAbstraction(const Node func, const std::vector<Node> formals, const Node formula);
+
+  Node unroll(const Node func, const std::vector<Node> formals, const Node formula, const size_t count);
+
   /* Members -------------------------------------------------------------- */
 
   /** Solver instance that owns this SolverEngine instance. */
