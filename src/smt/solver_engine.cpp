@@ -198,7 +198,8 @@ void SolverEngine::finishInit()
                != options::ProofGranularityMode::DSL_REWRITE)
     {
       Warning() << "WARNING: -o rare-db requires --produce-proofs and "
-                   "--proof-granularity=dsl-rewrite" << std::endl;
+                   "--proof-granularity=dsl-rewrite"
+                << std::endl;
     }
   }
   // enable proof support in the environment/rewriter
@@ -259,7 +260,6 @@ void SolverEngine::shutdown()
 
 SolverEngine::~SolverEngine()
 {
-
   try
   {
     shutdown();
@@ -290,7 +290,8 @@ SolverEngine::~SolverEngine()
   }
   catch (Exception& e)
   {
-    d_env->warning() << "cvc5 threw an exception during cleanup." << std::endl << e << std::endl;
+    d_env->warning() << "cvc5 threw an exception during cleanup." << std::endl
+                     << e << std::endl;
   }
 }
 
@@ -359,9 +360,10 @@ void SolverEngine::setInfo(const std::string& key, const std::string& value)
   {
     if (value != "2" && value != "2.6")
     {
-      d_env->warning() << "SMT-LIB version " << value
-                << " unsupported, defaulting to language (and semantics of) "
-                   "SMT-LIB 2.6\n";
+      d_env->warning()
+          << "SMT-LIB version " << value
+          << " unsupported, defaulting to language (and semantics of) "
+             "SMT-LIB 2.6\n";
     }
     getOptions().write_base().inputLanguage = Language::LANG_SMTLIB_V2_6;
     // also update the output language
@@ -632,7 +634,7 @@ void SolverEngine::defineFunctionsRec(
       Trace("SolverEngine::defineFunctionsRec")
           << "(unrolled " << lem << ")" << std::endl;
     }
-    
+
     if (!formals[i].empty())
     {
       // set the attribute to denote this is a function definition
@@ -1725,9 +1727,10 @@ void SolverEngine::checkUnsatCore()
                     << std::endl;
   if (r.isUnknown())
   {
-    d_env->warning() << "SolverEngine::checkUnsatCore(): could not check core result "
-                 "unknown."
-              << std::endl;
+    d_env->warning()
+        << "SolverEngine::checkUnsatCore(): could not check core result "
+           "unknown."
+        << std::endl;
   }
   else if (r.getStatus() == Result::SAT)
   {
@@ -1892,8 +1895,7 @@ std::vector<std::shared_ptr<ProofNode>> SolverEngine::getProof(
 void SolverEngine::proofToString(std::ostream& out,
                                  std::shared_ptr<ProofNode> fp)
 {
-  options::ProofFormatMode format_mode =
-      getOptions().proof.proofFormatMode;
+  options::ProofFormatMode format_mode = getOptions().proof.proofFormatMode;
   d_pfManager->printProof(
       out, fp, format_mode, ProofScopeMode::DEFINITIONS_AND_ASSERTIONS);
 }
@@ -2259,8 +2261,7 @@ void SolverEngine::setOption(const std::string& key,
     {
       // option exception
       std::stringstream ss;
-      ss << "expert option " << key
-         << " cannot be set in safe mode.";
+      ss << "expert option " << key << " cannot be set in safe mode.";
       // If we are setting to a default value, the exception can be avoided
       // by omitting the expert option.
       if (getOption(key) == value)
@@ -2274,7 +2275,8 @@ void SolverEngine::setOption(const std::string& key,
     }
     else if (oinfo.category == options::OptionInfo::Category::REGULAR)
     {
-      if (options().base.safeMode == options::SafeMode::SAFE && !oinfo.noSupports.empty())
+      if (options().base.safeMode == options::SafeMode::SAFE
+          && !oinfo.noSupports.empty())
       {
         std::stringstream ss;
         ss << "cannot set option " << key
@@ -2312,7 +2314,8 @@ void SolverEngine::setOption(const std::string& key,
         for (size_t i = 0; i < 2; i++)
         {
           const std::string& rkey = i == 0 ? d_safeOptsRegularOption : key;
-          const std::string& rvalue = i == 0 ? d_safeOptsRegularOptionValue : value;
+          const std::string& rvalue =
+              i == 0 ? d_safeOptsRegularOptionValue : value;
           bool isDefault = i == 0 ? d_safeOptsSetRegularOptionToDefault
                                   : (getOption(key) == value);
           if (isDefault)
@@ -2350,7 +2353,8 @@ ResourceManager* SolverEngine::getResourceManager() const
   return d_env->getResourceManager();
 }
 
-SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, const std::vector<Node> formals, const Node formula)
+SolverEngine::AbstractionData SolverEngine::makeAbstraction(
+    const Node func, const std::vector<Node> formals, const Node formula)
 {
   const TypeNode func_typ = func.getType().getRangeType();
 
@@ -2358,7 +2362,11 @@ SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, con
   std::vector<Node> calls;
   std::vector<Node> abs_vars;
 
-  enum JobKind { MAKE, BREAK };
+  enum JobKind
+  {
+    MAKE,
+    BREAK
+  };
 
   struct Job
   {
@@ -2373,14 +2381,10 @@ SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, con
   std::vector<Node> results;
 
   jobs.push_back(new Job{
-      BREAK,
-      formula,
-      kind::metakind::INVALID,
-      Kind::UNDEFINED_KIND,
-      0});
+      BREAK, formula, kind::metakind::INVALID, Kind::UNDEFINED_KIND, 0});
 
   NodeManager* node_mgr = d_env->getNodeManager();
-  
+
   while (!jobs.empty())
   {
     Job* job = jobs.back();
@@ -2418,28 +2422,25 @@ SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, con
             {
               const size_t n_children = expr.getNumChildren();
 
-              jobs.push_back(new Job{
-                  MAKE,
-                  Node::null(),
-                  kind::metakind::PARAMETERIZED,
-                  expr_kind,
-                  n_children + 1});
+              jobs.push_back(new Job{MAKE,
+                                     Node::null(),
+                                     kind::metakind::PARAMETERIZED,
+                                     expr_kind,
+                                     n_children + 1});
 
-              jobs.push_back(new Job{
-                  BREAK,
-                  expr_op,
-                  kind::metakind::INVALID,
-                  Kind::UNDEFINED_KIND,
-                  0});
+              jobs.push_back(new Job{BREAK,
+                                     expr_op,
+                                     kind::metakind::INVALID,
+                                     Kind::UNDEFINED_KIND,
+                                     0});
 
               for (size_t i = 0; i < n_children; ++i)
               {
-                jobs.push_back(new Job{
-                    BREAK,
-                    expr[i],
-                    kind::metakind::INVALID,
-                    Kind::UNDEFINED_KIND,
-                    0});
+                jobs.push_back(new Job{BREAK,
+                                       expr[i],
+                                       kind::metakind::INVALID,
+                                       Kind::UNDEFINED_KIND,
+                                       0});
               }
             }
 
@@ -2450,21 +2451,19 @@ SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, con
           {
             const size_t n_children = expr.getNumChildren();
 
-            jobs.push_back(new Job{
-                MAKE,
-                Node::null(),
-                kind::metakind::OPERATOR,
-                expr.getKind(),
-                n_children});
+            jobs.push_back(new Job{MAKE,
+                                   Node::null(),
+                                   kind::metakind::OPERATOR,
+                                   expr.getKind(),
+                                   n_children});
 
             for (size_t i = 0; i < n_children; ++i)
             {
-              jobs.push_back(new Job{
-                  BREAK,
-                  expr[i],
-                  kind::metakind::INVALID,
-                  Kind::UNDEFINED_KIND,
-                  0});
+              jobs.push_back(new Job{BREAK,
+                                     expr[i],
+                                     kind::metakind::INVALID,
+                                     Kind::UNDEFINED_KIND,
+                                     0});
             }
 
             break;
@@ -2493,7 +2492,7 @@ SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, con
         const Kind expr_kind = job->d_kind;
 
         std::vector<Node> args;
-        
+
         for (size_t i = 0; i < job->d_num_pop; i++)
         {
           args.push_back(results.back());
@@ -2508,7 +2507,7 @@ SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, con
         // Trace("SolverEngine::makeAbstraction") << ")" << std::endl;
 
         const Node result = node_mgr->mkNode(expr_kind, args);
-        
+
         results.push_back(result);
 
         break;
@@ -2521,7 +2520,7 @@ SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, con
       }
     }
 
-    delete job; 
+    delete job;
   }
 
   const Node result = results.back();
@@ -2553,14 +2552,289 @@ SolverEngine::AbstractionData SolverEngine::makeAbstraction(const Node func, con
 
     Trace("SolverEngine::makeAbstraction") << msg.str();
   }
-  
+
   return SolverEngine::AbstractionData{result, abs_vars, n_calls, calls};
 }
 
-Node SolverEngine::unroll(const Node func, const std::vector<Node> formals, const Node formula, const size_t count)
+Node SolverEngine::uniquify(const Node body)
+{
+  enum JobKind
+  {
+    BREAK,
+    MAKE,
+    FRESHEN
+  };
+
+  struct Job
+  {
+    const JobKind d_job_kind;  // ALL
+    const Node d_node;         // BREAK, FRESHEN
+    const Kind d_kind;         // MAKE
+    const size_t d_num_args;   // MAKE
+    const Node d_pat;          // FRESHEN
+
+    static Job mkBreak(const Node node)
+    {
+      return Job{BREAK, node, Kind::UNDEFINED_KIND, 0, Node::null()};
+    }
+
+    static Job mkMake(const Kind kind, const size_t num_args)
+    {
+      return Job{MAKE, Node::null(), kind, num_args, Node::null()};
+    }
+
+    static Job mkFreshen(const Node bvs, const Node pat)
+    {
+      return Job{FRESHEN, bvs, Kind::UNDEFINED_KIND, 0, pat};
+    }
+
+    std::string toString()
+    {
+      // msg is short for message.
+      std::ostringstream msg;
+
+      switch (d_job_kind)
+      {
+        case BREAK:
+        {
+          msg << "(Break " << d_node << ")";
+          break;
+        }
+        case MAKE:
+        {
+          msg << "(Make " << d_kind << " " << d_num_args << ")";
+          break;
+        }
+        case FRESHEN:
+        {
+          msg << "(Freshen " << d_node << " " << d_pat << ")";
+          break;
+        }
+      }
+
+      return msg.str();
+    }
+  };
+
+  std::vector<Job> jobs = {Job::mkBreak(body)};
+  std::vector<Node> results;
+  NodeManager* node_mgr = d_env->getNodeManager();
+
+  while (!jobs.empty())
+  {
+    Job job = jobs.back();
+    jobs.pop_back();
+
+    const JobKind jk = job.d_job_kind;
+
+    switch (jk)
+    {
+      case BREAK:
+      {
+        const Node node = job.d_node;
+
+        // nmk is 'metakind of node'.
+        const kind::MetaKind nmk = node.getMetaKind();
+
+        // nk is 'kind of node'
+        const Kind nk = node.getKind();
+
+        switch (nmk)
+        {
+          case kind::metakind::CONSTANT:
+          case kind::metakind::VARIABLE:
+          {
+            results.push_back(node);
+            break;
+          }
+
+          case kind::metakind::PARAMETERIZED:
+          {
+            jobs.push_back(Job::mkMake(nk, node.getNumChildren() + 1));
+
+            jobs.push_back(Job::mkBreak(node.getOperator()));
+
+            for (Node::iterator ch = node.begin(); ch != node.end(); ++ch)
+            {
+              jobs.push_back(Job::mkBreak(*ch));
+            }
+
+            break;
+          }
+
+          case kind::metakind::OPERATOR:
+          {
+            switch (nk)
+            {
+              case Kind::MATCH_BIND_CASE:
+              {
+                jobs.push_back(Job::mkFreshen(node[0], node[1]));
+
+                jobs.push_back(Job::mkBreak(node[2]));
+
+                break;
+              }
+
+              default:
+              {
+                jobs.push_back(Job::mkMake(nk, node.getNumChildren()));
+
+                for (Node::iterator ch = node.begin(); ch != node.end(); ++ch)
+                {
+                  jobs.push_back(Job::mkBreak(*ch));
+                }
+
+                break;
+              }
+            }
+            break;
+          }
+
+default:
+{
+  break;
+}
+
+        }
+      break;
+      }
+
+      case MAKE:
+      {
+        const Kind kind = job.d_kind;
+        const size_t num_args = job.d_num_args;
+
+        std::vector<Node> args;
+        for (size_t i = 0; i < num_args; i++)
+        {
+          args.push_back(results.back());
+          results.pop_back();
+        }
+
+        const Node node = node_mgr->mkNode(kind, args);
+
+        results.push_back(node);
+
+        break;
+      }
+
+      case FRESHEN:
+      {
+        // Grab the bound variables.
+        const Node bvs = job.d_node;
+
+        // Grab the pattern.
+        const Node pat = job.d_pat;
+
+        // Grab the body.
+        const Node case_body = results.back();
+        results.pop_back();
+
+        // Construct the substitution.
+        Subs sigma;
+        for (Node::iterator bv_ref = bvs.begin(); bv_ref != bvs.end(); ++bv_ref)
+        {
+          const Node bv = *bv_ref;
+
+          sigma.add(bv, node_mgr->mkBoundVar(bv.getType()));
+        }
+
+        // Apply the substitution to the bound variable list.
+        const Node new_bvs = sigma.apply(bvs);
+
+        // Apply the substitution to the pattern.
+        const Node new_pat = sigma.apply(pat);
+
+        // Apply the substitution to the body.
+        const Node new_case_body = sigma.apply(case_body);
+
+        // Construct a Node with kind MATCH_BIND_CASE.
+        const Node node = node_mgr->mkNode(
+            Kind::MATCH_BIND_CASE,
+            std::vector<Node>{new_bvs, new_pat, new_case_body});
+
+        // Push it on to the result stack.
+        results.push_back(node);
+
+        break;
+      }
+    }
+  }
+
+  const Node result = results.back();
+  results.clear();
+
+  Trace("SolverEngine::uniquify")
+      << "(uniquify " << body << " " << result << ")" << std::endl;
+
+  return result;
+}
+
+void SolverEngine::deconstruct(const Node body)
+{
+  // At this moment our only purpose is to better understand 'body'.
+  // We're going to traverse it in a depth-first left-to-right fashion and print
+  // all the nodes as we go along.
+
+  typedef Node Job;
+
+  std::vector<Job> jobs = {body};
+
+  while (!jobs.empty())
+  {
+    Job job = jobs.back();
+    jobs.pop_back();
+
+    switch (job.getMetaKind())
+    {
+      case kind::metakind::OPERATOR:
+      {
+        Trace("SolverEngine::uniquify") << job.getKind() << std::endl;
+
+        for (Node::const_reverse_iterator ch = job.rbegin(); ch != job.rend();
+             ++ch)
+        {
+          jobs.push_back(*ch);
+        }
+
+        break;
+      }
+      case kind::metakind::PARAMETERIZED:
+      {
+        Trace("SolverEngine::uniquify") << job.getKind() << std::endl;
+
+        for (Node::const_reverse_iterator ch = job.rbegin(); ch != job.rend();
+             ++ch)
+        {
+          jobs.push_back(*ch);
+        }
+
+        jobs.push_back(job.getOperator());
+
+        break;
+      }
+      case kind::metakind::CONSTANT:
+      case kind::metakind::VARIABLE:
+      {
+        Trace("SolverEngine::uniquify") << job << std::endl;
+
+        break;
+      }
+      default:
+      {
+        Assert(false);
+      }
+    }
+  }
+}
+
+Node SolverEngine::unroll(const Node func,
+                          const std::vector<Node> formals,
+                          const Node formula,
+                          const size_t count)
 {
   AbstractionData abs_dat = makeAbstraction(func, formals, formula);
-  
+
   const Node body = std::get<0>(abs_dat);
   const std::vector<Node> vars = std::get<1>(abs_dat);
   const size_t n_calls = std::get<2>(abs_dat);
@@ -2608,13 +2882,13 @@ Node SolverEngine::unroll(const Node func, const std::vector<Node> formals, cons
   jobs.push_back(new Job{UNROLL, count, id});
 
   NodeManager* node_mgr = d_env->getNodeManager();
-  
+
   while (!jobs.empty())
   {
     if (TraceIsOn("SolverEngine::unroll"))
     {
       std::ostringstream msg;
-      
+
       msg << "(jobs";
       for (const Job* job : jobs)
       {
@@ -2626,7 +2900,7 @@ Node SolverEngine::unroll(const Node func, const std::vector<Node> formals, cons
       msg << "(results";
       for (const Node& res : results)
       {
-        msg << " " << res; 
+        msg << " " << res;
       }
       msg << ")" << std::endl;
 
@@ -2643,7 +2917,7 @@ Node SolverEngine::unroll(const Node func, const std::vector<Node> formals, cons
         // cnt --> count, so as not to shadow the argument of the same name.
         const size_t cnt = job->d_count;
         const Subs& job_xform = job->d_xform;
-        
+
         if (cnt == 0)
         {
           std::vector<Node> args;
@@ -2688,7 +2962,9 @@ Node SolverEngine::unroll(const Node func, const std::vector<Node> formals, cons
         }
         concretes.append(job_xform);
 
-        const Node result = concretes.apply(body);
+        const Node new_body = uniquify(body);
+
+        const Node result = concretes.apply(new_body);
 
         Trace("SolverEngine::unroll") << "(combine " << concretes << " " << body
                                       << " " << result << ")" << std::endl;
