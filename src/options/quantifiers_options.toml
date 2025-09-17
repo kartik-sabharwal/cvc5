@@ -1892,3 +1892,21 @@ name   = "Quantifiers"
 [[option.mode.INTERLEAVE]]
   name = "interleave"
   help = "add instantiation and evaluation unfolding lemmas in the same step."
+
+### Symbolic evaluator options
+
+[[option]]
+  name       = "symbolicEvaluator"
+  category   = "regular"
+  long       = "symbolic-evaluator"
+  type       = "bool"
+  default    = "false"
+  help       = "perform symbolic evaluation on terms by unrolling recursively defined functions as well as rewriting"
+
+[[option]]
+  name       = "symbolicEvaluatorFuel"
+  category   = "regular"
+  long       = "symbolic-evaluator-fuel=N"
+  type       = "uint64_t"
+  default    = "10"
+  help       = "stop the symbolic evaluator stack machine after executing N many instructions"

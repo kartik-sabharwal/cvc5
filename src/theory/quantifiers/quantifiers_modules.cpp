@@ -132,6 +132,11 @@ void QuantifiersModules::initialize(Env& env,
     d_oracleEngine.reset(new OracleEngine(env, qs, qim, qr, tr));
     modules.push_back(d_oracleEngine.get());
   }
+  if (options.quantifiers.symbolicEvaluator)
+  {
+    d_sym_eval.reset(new SymbolicEvaluator(env, qs, qim, qr, tr));
+    modules.push_back(d_sym_eval.get());
+  }
 }
 
 }  // namespace quantifiers

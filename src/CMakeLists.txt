@@ -1092,6 +1092,8 @@ libcvc5_add_sources(
   theory/quantifiers/theory_quantifiers.h
   theory/quantifiers/theory_quantifiers_type_rules.cpp
   theory/quantifiers/theory_quantifiers_type_rules.h
+  theory/quantifiers/symbolic_evaluator.cpp
+  theory/quantifiers/symbolic_evaluator.h
   theory/quantifiers_engine.cpp
   theory/quantifiers_engine.h
   theory/relevance_manager.cpp

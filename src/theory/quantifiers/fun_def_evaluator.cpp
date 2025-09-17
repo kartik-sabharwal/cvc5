@@ -19,6 +19,8 @@
 #include "options/quantifiers_options.h"
 #include "theory/quantifiers/quantifiers_attributes.h"
 #include "theory/rewriter.h"
+#include "theory/uf/equality_engine.h"
+#include "expr/node_traversal.h"
 
 using namespace cvc5::internal::kind;
 
@@ -26,7 +28,10 @@ namespace cvc5::internal {
 namespace theory {
 namespace quantifiers {
 
-FunDefEvaluator::FunDefEvaluator(Env& env) : EnvObj(env) {}
+FunDefEvaluator::FunDefEvaluator(Env& env, QuantifiersState& qs)
+    : EnvObj(env), d_qstate(qs)
+{
+}
 
 bool FunDefEvaluator::assertDefinition(Node q)
 {
@@ -315,6 +320,363 @@ Node FunDefEvaluator::evaluateDefinitions(Node n) const
   Assert(visited.find(n) != visited.end());
   Assert(!visited.find(n)->second.isNull());
   return visited[n];
+}
+
+Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
+{
+  enum JobKind {EVAL, BAN, UNBAN, CHECK, BRANCH, COMBINE};
+
+  struct Job
+  {
+    JobKind d_job_kind;
+    Node d_nodes[2];
+    Kind d_node_kind;
+    size_t d_num_args;
+
+    static Job makeEval(Node n)
+    {
+      return Job{EVAL, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
+    }
+
+    static Job makeBan(Node n)
+    {
+      return Job{BAN, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
+    }
+
+    static Job makeUnban(Node n)
+    {
+      return Job{UNBAN, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
+    }
+
+    static Job makeCheck(Node n0, Node n1)
+    {
+      return Job{CHECK, {n0, n1}, Kind::UNDEFINED_KIND, 0};
+    }
+
+    static Job makeBranch(Node n0, Node n1)
+    {
+      return Job{BRANCH, {n0, n1}, Kind::UNDEFINED_KIND, 0};
+    }
+
+    static Job makeCombine(Kind k, size_t num_args)
+    {
+      return Job{COMBINE, {Node::null(), Node::null()}, k, num_args};
+    }
+
+    std::string toString() const
+    {
+      std::ostringstream pretty;
+      switch (d_job_kind)
+      {
+        case EVAL: 
+        {
+          pretty << "(EVAL " << d_nodes[0] << ")";
+          break;
+        }
+        case BAN: 
+        {
+          pretty << "(BAN " << d_nodes[0] << ")";
+          break;
+        }
+        case UNBAN: 
+        { 
+          pretty << "(UNBAN " << d_nodes[0] << ")";
+          break;
+        }
+        case CHECK: 
+        {
+          pretty << "(CHECK " << d_nodes[0] << " " << d_nodes[1] << ")";
+          break;
+        }
+        case BRANCH: 
+        { 
+          pretty << "(BRANCH " << d_nodes[0] << " " << d_nodes[1] << ")";
+          break;
+        }
+        case COMBINE: 
+        {
+          pretty << "(COMBINE " << d_node_kind << " " << d_num_args << ")";
+          break;
+        }
+        default: 
+        {
+          pretty << "(UNHANDLED)";
+          break;
+        }
+      }
+      return pretty.str();
+    }
+  };
+
+  std::vector<Job> jobs;
+  std::vector<Node> results;
+  std::unordered_set<Node> ban;
+  NodeManager* nm = nodeManager();
+  eq::EqualityEngine* ee = d_qstate.getEqualityEngine();
+
+  jobs.push_back(Job::makeEval(n));
+
+  while (!jobs.empty() && fuel > 0)
+  {
+    if (TraceIsOn("evaluateDefinitionsSymbolically"))
+    {
+      std::ostringstream msg;
+      msg << "(state" << std::endl;
+      msg << "(jobs" << std::endl;
+      for (const Job& job : jobs)
+      {
+        msg << job.toString() << std::endl;
+      }
+      msg << ")" << std::endl; // jobs
+      msg << "(results" << std::endl;
+      for (const Node& result : results)
+      {
+        msg << result << std::endl;
+      }
+      msg << ")" << std::endl; // results
+      msg << ")" << std::endl; // state
+      Trace("evaluateDefinitionsSymbolically") << msg.str();
+    }
+
+    --fuel;
+
+    Job j = jobs.back();
+    jobs.pop_back();
+
+    switch (j.d_job_kind)
+    {
+      case EVAL: 
+      {
+        Node jn = j.d_nodes[0];
+        
+        if (jn.isConst())
+        {
+          results.push_back(jn);
+        }
+        else if (jn.isVar() && jn.getType().isDatatype() && ee->hasTerm(jn))
+        {
+          bool not_found = true;
+          Node eqc_rep = ee->getRepresentative(jn);
+          eq::EqClassIterator eqc_it(eqc_rep, ee);
+          while (!eqc_it.isFinished() && not_found)
+          {
+            Node eqc_mem = *eqc_it;
+            if (eqc_mem.getKind() == Kind::APPLY_CONSTRUCTOR)
+            {
+              not_found = false;
+              jobs.push_back(Job::makeEval(eqc_mem));
+            }
+            ++eqc_it;
+          }
+          if (not_found)
+          {
+            results.push_back(jn);
+          }
+        }
+        else if (jn.isVar())
+        {
+          results.push_back(jn);
+        }
+        else if (jn.getKind() == Kind::ITE)
+        {
+          jobs.push_back(Job::makeBranch(jn[1], jn[2]));
+          jobs.push_back(Job::makeEval(jn[0]));
+        }
+        else if (jn.getMetaKind() == kind::metakind::OPERATOR)
+        {
+          jobs.push_back(Job::makeCombine(jn.getKind(), jn.getNumChildren()));
+          for (const Node child : jn)
+          {
+            jobs.push_back(Job::makeEval(child));
+          }
+        }
+        else if (jn.getKind() == Kind::APPLY_SELECTOR)
+        {
+          results.push_back(rewrite(jn));
+        }
+        else
+        {
+          Assert(jn.getMetaKind() == kind::metakind::PARAMETERIZED);
+          jobs.push_back(Job::makeCombine(jn.getKind(), jn.getNumChildren() + 1));
+          jobs.push_back(Job::makeEval(jn.getOperator()));
+          for (const Node child : jn)
+          {
+            jobs.push_back(Job::makeEval(child));
+          }
+        }
+        break;
+      }
+
+      case BAN: 
+      {
+        Node func_sym = j.d_nodes[0];
+        ban.insert(func_sym);
+        break;
+      }
+
+      case UNBAN:
+      {
+        Node func_sym = j.d_nodes[0];
+        ban.erase(func_sym);
+        break;
+      }
+
+      case CHECK: 
+      {
+        Node fallback = j.d_nodes[0];
+        Node func_sym = j.d_nodes[1];
+        Node cand = results.back();
+        results.pop_back();
+        bool found_ite = false;
+        bool found_func_sym = false;
+        NodeDfsIterable cand_iterable(cand);
+        NodeDfsIterator cand_it = cand_iterable.begin();
+        NodeDfsIterator cand_end = cand_iterable.end();
+        while (cand_it != cand_end && !found_ite)
+        {
+          Node cand_des = *cand_it;
+          if (cand_des.getKind() == Kind::ITE)
+          {
+            found_ite = true;
+          }
+          else if (cand_des.getKind() == Kind::APPLY_UF
+                   && cand_des.getOperator() == func_sym)
+          {
+            found_func_sym = true;
+          }
+          ++cand_it;
+        }
+        if (found_ite)
+        {
+          results.push_back(fallback);
+        }
+        else if (found_func_sym)
+        {
+          jobs.push_back(Job::makeEval(cand));
+        }
+        else
+        {
+          results.push_back(cand);
+        }
+        break;
+      }
+
+      case BRANCH: 
+      {
+        Node test = results.back();
+        Node conseq = j.d_nodes[0];
+        Node alt = j.d_nodes[1];
+        results.pop_back();
+        if (test.isConst())
+        {
+          if (test.getConst<bool>())
+          {
+
+            jobs.push_back(Job::makeEval(conseq));
+          }
+          else
+          {
+            jobs.push_back(Job::makeEval(alt));
+          }
+        }
+        else
+        {
+          results.push_back(nm->mkNode(Kind::ITE, test, conseq, alt));
+        }
+        break;
+      }
+
+      case COMBINE: 
+      {
+        Kind k = j.d_node_kind;
+        size_t num_args = j.d_num_args;
+        std::vector<Node> children;
+        for (size_t i = 0; i < num_args; ++i)
+        {
+          children.push_back(results.back());
+          results.pop_back();
+        }
+        Node combined = nm->mkNode(k, children);
+
+        if (k != Kind::APPLY_UF)
+        {
+          // Case (1).
+          results.push_back(rewrite(combined));
+        }
+        else
+        {
+          Node func_sym = children[0];
+          std::map<Node, FunDefInfo>::const_iterator info_it =
+              d_funDefMap.find(func_sym);
+          if (info_it == d_funDefMap.end())
+          {
+            // Case (2).
+            results.push_back(combined);
+          }
+          else
+          {
+            Node par_body = info_it->second.d_body;
+            std::vector<Node> formals = info_it->second.d_args;
+            std::vector<Node> actuals;
+            actuals.insert(actuals.end(), ++children.begin(), children.end());
+            Node body = evaluate(par_body, formals, actuals);
+
+            bool symbolic = false;
+            for (const Node& actual : actuals)
+            {
+              NodeDfsIterable actual_iterable(actual);
+              NodeDfsIterator actual_it = actual_iterable.begin();
+              NodeDfsIterator actual_end = actual_iterable.end();
+              while (actual_it != actual_end)
+              {
+                Node actual_des = *actual_it;
+                if (actual_des.isVar())
+                {
+                  symbolic = true;
+                  break;
+                }
+                ++actual_it;
+              }
+              if (symbolic)
+              {
+                break;
+              }
+            }
+
+            if (!symbolic)
+            {
+              // Case (3)
+              jobs.push_back(Job::makeEval(body));
+            }
+            else if (ban.find(func_sym) != ban.end())
+            {
+              // Case (4).
+              results.push_back(combined);
+            }
+            else
+            {
+              // Case (5).
+              jobs.push_back(Job::makeCheck(combined, func_sym));
+              jobs.push_back(Job::makeUnban(func_sym));
+              jobs.push_back(Job::makeEval(body));
+              jobs.push_back(Job::makeBan(func_sym));
+            }
+          }
+        }
+        break;
+      }
+
+      default:
+      {
+        break;
+      }
+    }
+  }
+
+  Node result = results.back();
+  results.clear();
+
+  return result;
 }
 
 bool FunDefEvaluator::hasDefinitions() const { return !d_funDefMap.empty(); }

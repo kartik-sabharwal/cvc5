@@ -35,6 +35,7 @@
 #include "theory/quantifiers/quant_split.h"
 #include "theory/quantifiers/sygus/synth_engine.h"
 #include "theory/quantifiers/sygus_inst.h"
+#include "theory/quantifiers/symbolic_evaluator.h"
 
 namespace cvc5::internal {
 namespace theory {
@@ -104,6 +105,8 @@ class QuantifiersModules
   std::unique_ptr<InstStrategyMbqi> d_mbqi;
   /** Oracle engine */
   std::unique_ptr<OracleEngine> d_oracleEngine;
+  /** Symbolic evaluator */
+  std::unique_ptr<SymbolicEvaluator> d_sym_eval;
 };
 
 }  // namespace quantifiers
