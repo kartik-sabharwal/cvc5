@@ -385,6 +385,13 @@ class ConflictConjectureGenerator : public QuantifiersModule
    */
   bool filterManual(const Node conj_body, int tested);
 
+  /**
+   * To print the generalization trie, first print the path you're at then print
+   * the list of pairs at that path.  At each job you can store a vector as well
+   * as a GenTrie instance.
+   */
+  void debugPrintGenTrie(GenTrie& gt);
+
   /** I'll document this after I finish writing it. */
   const std::unordered_set<Node> collectRecursivelyDefinedFunctionSymbols(quantifiers::FirstOrderModel* mdl);
 };

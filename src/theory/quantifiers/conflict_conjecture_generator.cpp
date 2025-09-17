@@ -711,6 +711,44 @@ void ConflictConjectureGenerator::checkDisequality(const Node& eq)
     getGeneralizations(v);
     Trace("cconjGen") << ")" << std::endl;
   }
+
+  if (TraceIsOn("ConflictConjectureGenerator::equality-engine"))
+  {
+    d_qstate.debugPrintEqualityEngine("ConflictConjectureGenerator::equality-engine");
+    Trace("ConflictConjectureGenerator::equality-engine") << std::endl;
+  }
+
+  if (TraceIsOn("ConflictConjectureGenerator::d_bv"))
+  {
+    Trace("ConflictConjectureGenerator::d_bv") << "(d_bv";
+    for (const std::pair<Node, Node> entry : d_bv)
+    {
+      Trace("ConflictConjectureGenerator::d_bv") << std::endl << std::get<0>(entry) << " -> " << std::get<1>(entry);
+    }
+    Trace("ConflictConjectureGenerator::d_bv") << ")" << std::endl;
+  }
+
+  if (TraceIsOn("ConflictConjectureGenerator::d_eqcGenRec"))
+  {
+    Trace("ConflictConjectureGenerator::d_eqcGenRec") << "(d_eqcGenRec";
+    for (const std::pair<Node, std::vector<Node>> entry : d_eqcGenRec)
+    {
+      Trace("ConflictConjectureGenerator::d_eqcGenRec") << std::endl << "(" << std::get<0>(entry) << " (";
+      for (const Node& gen : std::get<1>(entry))
+      {
+        Trace("ConflictConjectureGenerator::d_eqcGenRec") << " " << gen;
+      }
+      Trace("ConflictConjectureGenerator::d_eqcGenRec") << "))";
+    }
+    Trace("ConflictConjectureGenerator::d_eqcGenRec") << ")" << std::endl;
+  }
+
+  // Print the entirety of the generalization trie.
+  if (TraceIsOn("ConflictConjectureGenerator::d_gtrie"))
+  {
+    debugPrintGenTrie(d_gtrie);
+  }
+
   // see if any generalization of the right hand
   std::vector<Node>& genRhs = d_eqcGenRec[vars[1]];
 
@@ -729,6 +767,16 @@ void ConflictConjectureGenerator::checkDisequality(const Node& eq)
     Trace("cconjGen") << ")" << std::endl;
   }
   Trace("cconjGen") << ")" << std::endl;
+
+  if (TraceIsOn("ConflictConjectureGenerator::d_conjBuffer"))
+  {
+    Trace("ConflictConjectureGenerator::d_conjBuffer") << "(d_conjBuffer";
+    for (const Node& buf_conj : d_conjBuffer)
+    {
+      Trace("ConflictConjectureGenerator::d_conjBuffer") << std::endl << buf_conj;
+    }
+    Trace("ConflictConjectureGenerator::d_conjBuffer") << ")" << std::endl;
+  }
 
   // go back and see if the conjectures should be filtered
   for (const Node& lem : d_conjBuffer)
@@ -3043,6 +3091,56 @@ bool ConflictConjectureGenerator::filterProvableWithoutConjectures(const Node& c
   Trace("filterProvable") << "(induction " << lem << " " << r << ")" << std::endl;
 
   return (r.getStatus() == Result::UNKNOWN);
+}
+
+void ConflictConjectureGenerator::debugPrintGenTrie(GenTrie& gt)
+{
+  struct Job
+  {
+    std::vector<Node> d_path;
+    const GenTrie d_gt;
+  };
+
+  std::vector<Job> jobs;
+  jobs.push_back({Job{std::vector<Node>{}, gt}});
+
+  // The front of the job queue.  The back of the job queue is jobs.size().
+  // When the two are equal the job queue is empty.
+  size_t front = 0;
+
+  Trace("ConflictConjectureGenerator::d_gtrie") << "(d_gtrie " << std::endl;
+  while (front != jobs.size())
+  {
+    Job job = jobs[front];
+    ++front;
+
+    std::vector<Node> curr_path = job.d_path;
+    GenTrie curr_gt = job.d_gt;
+
+    Trace("ConflictConjectureGenerator::d_gtrie") << "(path";
+    for (const Node& av : curr_path)
+    {
+      Trace("ConflictConjectureGenerator::d_gtrie") << " " << av;
+    }
+    Trace("ConflictConjectureGenerator::d_gtrie") << ") ";
+
+    Trace("ConflictConjectureGenerator::d_gtrie") << "(generalizations";
+    for (const std::pair<Node, Node>& entry : curr_gt.d_gens)
+    {
+      Trace("ConflictConjectureGenerator::d_gtrie") << " " << std::get<0>(entry);
+    }
+    Trace("ConflictConjectureGenerator::d_gtrie") << ")" << std::endl;
+
+    for (const std::pair<Node, GenTrie> entry : curr_gt.d_children)
+    {
+      std::vector<Node> new_path;
+      new_path.insert(new_path.begin(), curr_path.begin(), curr_path.end());
+      new_path.push_back(std::get<0>(entry));
+
+      jobs.push_back(Job{new_path, std::get<1>(entry)});
+    }
+  }
+  Trace("ConflictConjectureGenerator::d_gtrie") << ")" << std::endl;
 }
 
 const Node& Decision::getPat()

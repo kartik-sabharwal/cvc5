@@ -5,7 +5,11 @@
 @(define WorksButSlow "https://github.com/kartik-sabharwal/cvc5/releases/tag/WorksButSlow")
 @(define plus (elem #:style "mathrm" "plus"))
 @(define S (elem #:style "mathrm" "S"))
+@(define pr (elem #:style "mathrm" "p"))
+@(define is-Z (elem #:style "mathrm" "is\\text{-}Z"))
+@(define is-S (elem #:style "mathrm" "is\\text{-}S"))
 @(define forall "\\forall")
+@(define (bv n) (list @elem[#:style "mathit" "bv"] (string-append "_{" (number->string n) "}")))
 
 @title[#:date ""]{Conflict-Based Conjecture Generator}
 
@@ -220,3 +224,53 @@ cvc5 will need to skolemize this twice.
 @; 5.  (forall ((a Nat) (b Nat) (c Nat)) (= (S (plus b (S (plus a c)))) (plus (S (S a)) (plus b c))))
 @; 6.  (forall ((a Nat) (b Nat) (c Nat)) (= (plus (S (S b)) (plus a c)) (S (plus a (plus (S b) c)))))
 @; 7.  (forall ((a Nat) (b Nat) (c Nat)) (= (plus (S (S b)) (plus a c)) (S (plus a (S (plus b c))))))
+
+@section{Another Situation to Diagnose}
+
+Consider this relatively simple problem.
+We're going to solve it as a human being before we check whether cvc5 takes the right steps to solve it.
+
+@mp{
+@forall n. @S(@S(@plus(n, n))) = @plus(@S(n), @S(n))
+}
+
+We'll try to prove it by induction on @m{n}.
+Skolemize @m{n} as @m{k}.
+The base case, where @m{@is-Z(k)} holds, is trivial.
+Let's skip it.
+Now consider the induction case.
+That's when @m{@is-S(k)} holds.
+The induction hypothesis is:
+
+@mp{
+@S(@S(@plus(@pr(k), @pr(k)))) = @plus(@S(@pr(k)), @S(@pr(k)))
+}
+
+The goal is:
+
+@mp{
+@S(@S(@plus(k, k))) = @plus(@S(k), @S(k))
+}
+
+Symbolic evaluation of the goal's LHS yields:
+
+@mp{
+@S(@S(@S(@plus(@pr(k), k))))
+}
+
+Symbolic evaluation of the RHS yields:
+
+@mp{
+@S(@S(@plus(@pr(k), @S(k))))
+}
+
+Abstracting away @m{@pr(k)} as @m{m} and @m{k} as @m{n} yields the conjecture:
+
+@mp{
+@forall m, n. @S(@S(@S(@plus(m, n)))) = @S(@S(@plus(m, @S(n))))
+}
+
+This ought to be provable.
+What is cvc5 missing?
+Maybe we'll benefit from thinking in terms of equivalence classes.
+In our trace, the LHS corresponds with @m{@bv[621]} and the RHS corresponds with @m{@bv[629]}.
