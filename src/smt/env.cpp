@@ -43,6 +43,7 @@ Env::Env(NodeManager* nm, const Options* opts)
     : d_nm(nm),
       d_context(new context::Context()),
       d_userContext(new context::UserContext()),
+      d_preserved_formulas(d_context.get()),
       d_pfManager(nullptr),
       d_proofNodeManager(nullptr),
       d_rewriter(new theory::Rewriter(nm)),
@@ -55,6 +56,10 @@ Env::Env(NodeManager* nm, const Options* opts)
       d_uninterpretedSortOwner(theory::THEORY_UF),
       d_boolTermSkolems(d_userContext.get())
 {
+  // @Kartik.
+  d_inference_stream = new std::ofstream("cvc5-inferences.out", std::ios::app);
+  // ********
+
   if (opts != nullptr)
   {
     d_options.copyValues(*opts);
@@ -92,8 +97,6 @@ void Env::finishInit(smt::PfManager* pm)
   {
     d_ochecker.reset(new theory::quantifiers::OracleChecker(*this));
   }
-  d_statisticsRegistry->setStatsAll(d_options.base.statisticsAll);
-  d_statisticsRegistry->setStatsInternal(d_options.base.statisticsInternal);
 }
 
 void Env::shutdown()
@@ -101,7 +104,14 @@ void Env::shutdown()
   d_rewriter.reset(nullptr);
   // d_resourceManager must be destroyed before d_statisticsRegistry
   d_resourceManager.reset(nullptr);
+
+  // @Kartik.
+  d_inference_stream->close();
+  delete d_inference_stream;
+  // ********
 }
+
+std::ofstream* Env::getInferenceStream() const { return d_inference_stream; };
 
 context::Context* Env::getContext() { return d_context.get(); }
 
@@ -400,5 +410,15 @@ Node Env::getSharableFormula(const Node& n) const
   on = senc.convert(on);
   return on;
 }
+
+const context::CDList<Node>& Env::getPreservedFormulas()
+{
+  return d_preserved_formulas;
+}
+
+void Env::preserveFormula(const Node& phi)
+{
+  d_preserved_formulas.push_back(phi);
+}    
 
 }  // namespace cvc5::internal

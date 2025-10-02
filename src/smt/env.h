@@ -19,6 +19,7 @@
 #include <memory>
 
 #include "context/cdhashset.h"
+#include "context/cdlist.h"
 #include "options/options.h"
 #include "proof/method_id.h"
 #include "theory/logic_info.h"
@@ -78,6 +79,8 @@ class Env
   ~Env();
 
   /* Access to members------------------------------------------------------- */
+  std::ofstream* getInferenceStream() const;
+
   /** Get a pointer to the node manager */
   NodeManager* getNodeManager() const;
 
@@ -336,6 +339,10 @@ class Env
    */
   Node getSharableFormula(const Node& n) const;
 
+  const context::CDList<Node>& getPreservedFormulas();
+
+  void preserveFormula(const Node&);
+  
  private:
   /* Private initialization ------------------------------------------------- */
 
@@ -356,6 +363,10 @@ class Env
   std::unique_ptr<context::Context> d_context;
   /** User level context owned by this Env */
   std::unique_ptr<context::UserContext> d_userContext;
+  /** @Kartik.  This will preserve some formulas that are about to be pre-processed. */
+  context::CDList<Node> d_preserved_formulas;
+  /** @Kartik.  This will store a handle to a file to which we'll print our debugging information. */
+  std::ofstream* d_inference_stream;
   /**
    * The proof manager of the solver engine.
    */
