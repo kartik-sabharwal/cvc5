@@ -351,7 +351,7 @@ class ConflictConjectureGenerator : public QuantifiersModule
    * Calls a subsolver to check whether the proposed conjecture is provable by
    * induction without conjecture generation.
    */
-  bool filterProvableWithoutConjectures(const Node& conj);
+  bool filterInductivelyEntailed(const Node& conj);
   
   /**
    * Currently unused.  I am keeping the code around for reference on how to use
