@@ -321,19 +321,15 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     d_iuqf_populated = true;
   }
 
-  // if (!d_short_circuited)
-  // {
-  //   shortCircuit();
-  // }
-  // return;
-  
   Trace("cconjGen") << "(list " << std::endl;
 
-  // update the function definitions
-  if (!d_set_up_fun_def_evaluator)
-  {
-    setUpFunDefEvaluator();
-  } 
+  // I am not going to set up the evaluator because I will not rely on it during
+  // evaluation.  I will employ the e-matching based filter instead.
+
+  // if (!d_set_up_fun_def_evaluator)
+  // {
+  //   setUpFunDefEvaluator();
+  // } 
 
   Trace("ccgen-debug") << "Refresh function definitions..." << std::endl;
   std::unordered_set<Node> qsyms;
@@ -796,6 +792,13 @@ void ConflictConjectureGenerator::checkDisequality(const Node& eq)
     Trace("cconj") << "*** Conjecture : " << clem[0] << " == " << clem[1]
                    << std::endl;
     d_conjGen.emplace_back(lem);
+  }
+
+  // Remove this as soon as you can.
+  {
+    Trace("cconj-filter") << "Have " << d_qim.numPendingLemmas()
+                          << " pending lemmas" << std::endl;
+    d_qim.doPendingLemmas();
   }
 }
 
@@ -1733,41 +1736,39 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
   Node a = clem[0];
   Node b = clem[1];
 
-  if (options().quantifiers.ccgenFilterEval)
-  {  
-    Trace("cconj-filter") << "Try filter based on evaluation" << std::endl;
-    if (filterEvalsToFalse(a, b))
-    {
-      Trace("cconj-filter") << "...filtered based on evaluation" << std::endl;
-      Trace("cconjGen") << " (list \"evaluation\" #f))" << std::endl;
-      return true;
-    }
-    else
-    {
-      Trace("cconjGen") << " (list \"evaluation\" #t)";
-    }
-  }
+  // if (options().quantifiers.ccgenFilterEval)
+  // {  
+  //   Trace("cconj-filter") << "Try filter based on evaluation" << std::endl;
+  //   if (filterEvalsToFalse(a, b))
+  //   {
+  //     Trace("cconj-filter") << "...filtered based on evaluation" << std::endl;
+  //     Trace("cconjGen") << " (list \"evaluation\" #f))" << std::endl;
+  //     return true;
+  //   }
+  //   else
+  //   {
+  //     Trace("cconjGen") << " (list \"evaluation\" #t)";
+  //   }
+  // }
 
   int tested = 0;
 
-  // const bool discard = filterEmatching(a, b, tested);
-
-  // Trace("cconj-filter") << "Try filter based on E-matching" << std::endl;
-  // if (discard)
-  // {
-  //   Trace("cconj-filter") << "...filtered based on E-matching" << std::endl;
-  //   Trace("cconjGen") << " (list \"e-matching\" #f))" << std::endl;
-  //   return true;
-  // }
-  // else
-  // {
-  //   Trace("cconjGen") << " (list \"e-matching\" #t)";
-  // }
+  const bool discard = filterEmatching(a, b, tested);
+  Trace("cconj-filter") << "Try filter based on E-matching" << std::endl;
+  if (discard)
+  {
+    Trace("cconj-filter") << "...filtered based on E-matching" << std::endl;
+    Trace("cconjGen") << " (list \"e-matching\" #f))" << std::endl;
+    return true;
+  }
+  else
+  {
+    Trace("cconjGen") << " (list \"e-matching\" #t)";
+  }
 
   Trace("cconj-filter") << "Try filter based on deductively entailed"
                         << std::endl;
-  if ( filterDeductivelyEntailed(a, b)
-     )
+  if (filterDeductivelyEntailed(a, b))
   {
     Trace("cconj-filter") << "...filtered based on deductively entailed"
                           << std::endl;
@@ -1779,20 +1780,40 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
     Trace("cconjGen") << " (list \"entailment\" #t)";
   }
 
-  if ( !filterProvableWithoutConjectures(clem)
-     )
+  Trace("cconj-filter") << "Try filter based on inductively entailed"
+                        << std::endl;
+  // If clem is inductively entailed we want to keep it around!  If it
+  // is not inductively entailed then we reject it.
+  if (filterInductivelyEntailed(clem))
   {
+    NodeManager* node_mgr = nodeManager();
+    std::unordered_set<Node> fvs_set{};
+    expr::getFreeVariables(clem, fvs_set);
+    std::vector<Node> fvs{};
+    fvs.insert(fvs.end(), fvs_set.begin(), fvs_set.end());
+    const Node bvs = node_mgr->mkNode(Kind::BOUND_VAR_LIST, fvs);
+    Node lem = node_mgr->mkNode(Kind::FORALL, bvs, clem);
+    Trace("cconj-filter") << "...inductively entailed, asserting " << lem << " immediately...";
+    bool result = d_qim.addPendingLemma(lem, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
+    Trace("cconj-filter") << "...tried with result " << result << std::endl;
+  }
+  else
+  {
+    Trace("cconj-filter") << "...rejected since not inductively entailed"
+                          << std::endl;
     return true;
   }
-
-  if (filterManual(clem, tested))
-  {
-    return true;
-  }
+  
+  // if (filterManual(clem, tested))
+  // {
+  //   return true;
+  // }
 
   Trace("cconjGen") << ")" << std::endl;
   
-  // Change this to 'false' eventually
+  // Reject unconditionally for now, since if inductively entailed we
+  // assert it immediately.  If we don't reject it here it might get
+  // added as a splitting lemma which would be inefficient.
   return true;
 }
 
@@ -3019,7 +3040,7 @@ bool ConflictConjectureGenerator::filterManual(const Node conj_body, int tested)
 
   // Send lemma with no phase requirement.
   d_qim.addPendingLemma(lem, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
-
+  
   // Discard the conjecture unconditionally.
   return true;
 }
@@ -3043,33 +3064,8 @@ bool ConflictConjectureGenerator::promptForYesOrNo(std::string prompt) const
   return resp;
 }
 
-bool ConflictConjectureGenerator::filterProvableWithoutConjectures(const Node& conj_body)
+bool ConflictConjectureGenerator::filterInductivelyEntailed(const Node& conj_body)
 {
-  // std::unique_ptr<SolverEngine> dentChecker;
-  // SubsolverSetupInfo ssi(d_env, d_subOptions);
-  // initializeSubsolver(d_env.getNodeManager(), dentChecker, ssi, true, 100);
-  // quantifiers::FirstOrderModel* model = d_treg.getModel();
-  // for (size_t i = 0; i < model->getNumAssertedQuantifiers(); i++)
-  // {
-  //   Node phi = model->getAssertedQuantifier(i);
-  //   dentChecker->assertFormula(phi);
-  // }
-  // Node lem = a.eqNode(b);
-  // std::unordered_set<Node> fvs;
-  // expr::getFreeVariables(lem, fvs);
-  // std::vector<Node> bvs(fvs.begin(), fvs.end());
-  // if (!bvs.empty())
-  // {
-  //   NodeManager* nm = nodeManager();
-  //   lem = nm->mkNode(Kind::FORALL, nm->mkNode(Kind::BOUND_VAR_LIST, bvs), lem);
-  // }
-  // lem = lem.notNode();
-  // dentChecker->assertFormula(lem);
-  // Trace("cconj-filter") << "Check with subsolver" << std::endl;
-  // Result r = dentChecker->checkSat();
-  // Trace("cconj-filter") << "  ...got : " << r << std::endl;
-  // return (r.getStatus() == Result::UNSAT);
-
   std::unique_ptr<SolverEngine> induction_prover;
 
   Options ind_prov_opts;
@@ -3102,7 +3098,8 @@ bool ConflictConjectureGenerator::filterProvableWithoutConjectures(const Node& c
   Result r = induction_prover->checkSat();
   Trace("filterProvable") << "(induction " << lem << " " << r << ")" << std::endl;
 
-  return (r.getStatus() == Result::UNKNOWN);
+  // Candidate conjecture is inductively entailed.
+  return (r.getStatus() == Result::UNSAT);
 }
 
 void ConflictConjectureGenerator::debugPrintGenTrie(GenTrie& gt)
