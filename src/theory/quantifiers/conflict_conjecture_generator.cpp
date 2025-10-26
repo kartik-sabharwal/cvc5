@@ -1796,14 +1796,19 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
     Trace("cconj-filter") << "...inductively entailed, asserting " << lem << " immediately...";
     bool result = d_qim.addPendingLemma(lem, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
     Trace("cconj-filter") << "...tried with result " << result << std::endl;
+
+    Trace("cconj-filter2") << "ASSUMED " << clem << std::endl;
   }
   else
   {
     Trace("cconj-filter") << "...rejected since not inductively entailed"
                           << std::endl;
+
+    Trace("cconj-filter2") << "PROMISING " << clem << std::endl;
+
     return true;
   }
-  
+
   // if (filterManual(clem, tested))
   // {
   //   return true;
@@ -2316,9 +2321,11 @@ bool ConflictConjectureGenerator::filterDeductivelyEntailed(const Node& a,
   SubsolverSetupInfo ssi(d_env, d_subOptions);
   initializeSubsolver(d_env.getNodeManager(), dentChecker, ssi, true, 100);
   quantifiers::FirstOrderModel* model = d_treg.getModel();
+  Trace("cconj-filter") << "Assuming:" << std::endl;
   for (size_t i = 0; i < model->getNumAssertedQuantifiers(); i++)
   {
     Node phi = model->getAssertedQuantifier(i);
+    Trace("cconj-filter") << phi << std::endl;
     dentChecker->assertFormula(phi);
   }
   Node lem = a.eqNode(b);
@@ -2332,7 +2339,7 @@ bool ConflictConjectureGenerator::filterDeductivelyEntailed(const Node& a,
   }
   lem = lem.notNode();
   dentChecker->assertFormula(lem);
-  Trace("cconj-filter") << "Check with subsolver" << std::endl;
+  Trace("cconj-filter") << "Check " << lem << " with subsolver" << std::endl;
   Result r = dentChecker->checkSat();
   Trace("cconj-filter") << "  ...got : " << r << std::endl;
   return (r.getStatus() == Result::UNSAT);
@@ -3070,7 +3077,7 @@ bool ConflictConjectureGenerator::filterInductivelyEntailed(const Node& conj_bod
 
   Options ind_prov_opts;
   ind_prov_opts.copyValues(d_subOptions);
-  d_subOptions.write_quantifiers().dtStcInduction = true;
+  ind_prov_opts.write_quantifiers().dtStcInduction = true;
   smt::SetDefaults::disableChecking(ind_prov_opts);
 
   SubsolverSetupInfo ssi(d_env, ind_prov_opts);
