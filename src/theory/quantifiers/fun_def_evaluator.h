@@ -171,7 +171,7 @@ class FunDefEvaluator : protected EnvObj
    * Unlike evaluateDefinitions(), this function does not care to cache
    * intermediate results.  We have separate job and memory stacks as in other
    * worklist algorithms.  We also maintain a mutable set of function symbols
-   * that we are not allowed to unroll.
+   * that we are not allowed to unroll, the "banned set".
    *
    * The 6 job kinds are EVAL, BAN, UNBAN, CHECK, BRANCH, and COMBINE.  Each job
    * is a struct with 5 fields: a job kind, two nodes, a node kind, and a
@@ -179,7 +179,7 @@ class FunDefEvaluator : protected EnvObj
    * expect a single function symbol as an argument.  CHECK expects two
    * arguments.  The first can be any node though the second must be a function
    * symbol.  BRANCH expects any two nodes as arguments.  COMBINE expects a node
-   * kind an a size_t.
+   * kind and a size_t.
    *
    * To handle BAN(f) and UNBAN(f) simply add or remove f from the banned set as
    * suggested by the job's kind.
@@ -238,13 +238,12 @@ class FunDefEvaluator : protected EnvObj
    * ap for 'application'.
    */
   Node evaluateDefinitionsSymbolically(Node n, size_t fuel) const;
- /**
+  /**
    * Has a call to assertDefinition been made? If this returns false, then
    * the evaluate method is the same as calling the rewriter, and returning
    * false if the result is non-constant.
    */
   bool hasDefinitions() const;
-
   /** Get definitions */
   const std::vector<Node>& getDefinitions() const;
   /** Get definition for function symbol f, if it is cached by this class */
@@ -261,6 +260,51 @@ class FunDefEvaluator : protected EnvObj
   bool getDefinitionIndex(const Node& q, size_t& index) const;
   /** Add definition head = body, from quantified formula q */
   void addDefinition(const Node& head, const Node& body, const Node& q);
+  /**
+   * Returns true if DICT has KEY as a key and false otherwise.
+   */
+  template <typename T>
+  static bool mapHasKey(const std::unordered_map<Node, T>& dict, const Node key)
+  {
+    return dict.find(key) != dict.end();
+  }
+  /**
+   * Returns true if nodes contains node and false otherwise.
+   */
+  static bool setHasKey(const std::set<Node>& nodes, const Node node);
+  /**
+   * Returns true if nodes1 is a subset of nodes2 and false otherwise.
+   */
+  static bool subset(const std::set<Node>& nodes1, const std::set<Node>& nodes2);
+  /**
+   * Type alias for cache maintained by the symbolic evaluator.
+   */
+  typedef std::unordered_map<Node, std::vector<std::pair<std::set<Node>, Node>>> Cache;
+  /**
+   * This function reads the entry in CACHE corresponding to node T and banned
+   * set BETA.  If CACHE does not have T as a key then this function returns the
+   * null node.  Otherwise CACHE has an entry corresponding to T.  The value
+   * associated with T must be a vector of ban set-node pairs.  The function
+   * searches this vector for a pair (GAMMA, U) where GAMMA is a subset of BETA.
+   * GAMMA being a subset of BETA is supposed to mean that T evaluates to U in a
+   * less constrained setting than BETA.  If such a pair is found this function
+   * returns U.  If no such pair exists this function returns the null node.
+   */
+  static Node cacheRead(Cache& cache, const Node t, const std::set<Node>& beta);
+  /**
+   * This function writes the mapping T --> (BETA, U) to the cache CACHE.  If
+   * CACHE doesn't have a mapping for T already then we associate T with the
+   * singleton list containing the pair (BETA, U).  If CACHE already has a
+   * mapping for T then we consider the vector T maps to.  The function expects
+   * that for each pair (GAMMA, V) in the vector either BETA is a subset of
+   * GAMMA, or BETA is disjoint from GAMMA.  Suppose we find a compatible
+   * element (GAMMA_0, V_0) such that BETA is a subset of GAMMA_0.  Then we
+   * replace (GAMMA_0, V_0) with (BETA, U) because BETA is computed under fewer
+   * constraints.  If there is no compatible element then we add (BETA, U) to
+   * the vector.
+   */
+  static void cacheWrite(Cache& cache, const Node t, const std::set<Node>& beta, const Node u);
+
   /** information cached per function definition */
   class FunDefInfo
   {

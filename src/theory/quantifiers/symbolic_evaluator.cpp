@@ -38,7 +38,7 @@ void SymbolicEvaluator::check(Theory::Effort e, QEffort quant_e)
   
   Trace("SymbolicEvaluator") << "(round)" << std::endl;
 
-  if (d_round == 3)
+  if (d_round == 7)
   {
     Trace("SymbolicEvaluator") << getEqualityEngine()->debugPrintEqc();
 

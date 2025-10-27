@@ -324,7 +324,7 @@ Node FunDefEvaluator::evaluateDefinitions(Node n) const
 
 Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
 {
-  enum JobKind {EVAL, BAN, UNBAN, CHECK, BRANCH, COMBINE};
+  enum JobKind {EVAL, BAN, UNBAN, CHECK, BRANCH, COMBINE, SAVE};
 
   struct Job
   {
@@ -363,6 +363,11 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
       return Job{COMBINE, {Node::null(), Node::null()}, k, num_args};
     }
 
+    static Job makeSave(Node n)
+    {
+      return Job{SAVE, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
+    }
+
     std::string toString() const
     {
       std::ostringstream pretty;
@@ -398,6 +403,11 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
           pretty << "(COMBINE " << d_node_kind << " " << d_num_args << ")";
           break;
         }
+        case SAVE:
+        {
+          pretty << "(SAVE " << d_nodes[0] << ")";
+          break;
+        }
         default: 
         {
           pretty << "(UNHANDLED)";
@@ -410,9 +420,10 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
 
   std::vector<Job> jobs;
   std::vector<Node> results;
-  std::unordered_set<Node> ban;
+  std::set<Node> ban;
+  Cache cache;
   NodeManager* nm = nodeManager();
-  eq::EqualityEngine* ee = d_qstate.getEqualityEngine();
+  // eq::EqualityEngine* ee = d_qstate.getEqualityEngine();
 
   jobs.push_back(Job::makeEval(n));
 
@@ -448,42 +459,49 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
       case EVAL: 
       {
         Node jn = j.d_nodes[0];
-        
-        if (jn.isConst())
+        Node cached = cacheRead(cache, jn, ban);
+        if (!cached.isNull())
+        {
+          Trace("evaluateDefinitionsSymbolically") << "(cache " << jn << " " << cached << ")" << std::endl;
+          results.push_back(cached);
+        }
+        else if (jn.isConst())
         {
           results.push_back(jn);
         }
-        else if (jn.isVar() && jn.getType().isDatatype() && ee->hasTerm(jn))
-        {
-          bool not_found = true;
-          Node eqc_rep = ee->getRepresentative(jn);
-          eq::EqClassIterator eqc_it(eqc_rep, ee);
-          while (!eqc_it.isFinished() && not_found)
-          {
-            Node eqc_mem = *eqc_it;
-            if (eqc_mem.getKind() == Kind::APPLY_CONSTRUCTOR)
-            {
-              not_found = false;
-              jobs.push_back(Job::makeEval(eqc_mem));
-            }
-            ++eqc_it;
-          }
-          if (not_found)
-          {
-            results.push_back(jn);
-          }
-        }
+        // else if (jn.isVar() && jn.getType().isDatatype() && ee->hasTerm(jn))
+        // {
+        //   bool not_found = true;
+        //   Node eqc_rep = ee->getRepresentative(jn);
+        //   eq::EqClassIterator eqc_it(eqc_rep, ee);
+        //   while (!eqc_it.isFinished() && not_found)
+        //   {
+        //     Node eqc_mem = *eqc_it;
+        //     if (eqc_mem.getKind() == Kind::APPLY_CONSTRUCTOR)
+        //     {
+        //       not_found = false;
+        //       jobs.push_back(Job::makeEval(eqc_mem));
+        //     }
+        //     ++eqc_it;
+        //   }
+        //   if (not_found)
+        //   {
+        //     results.push_back(jn);
+        //   }
+        // }
         else if (jn.isVar())
         {
           results.push_back(jn);
         }
         else if (jn.getKind() == Kind::ITE)
         {
+          jobs.push_back(Job::makeSave(jn));
           jobs.push_back(Job::makeBranch(jn[1], jn[2]));
           jobs.push_back(Job::makeEval(jn[0]));
         }
         else if (jn.getMetaKind() == kind::metakind::OPERATOR)
         {
+          jobs.push_back(Job::makeSave(jn));
           jobs.push_back(Job::makeCombine(jn.getKind(), jn.getNumChildren()));
           for (const Node child : jn)
           {
@@ -492,11 +510,13 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
         }
         else if (jn.getKind() == Kind::APPLY_SELECTOR)
         {
+          jobs.push_back(Job::makeSave(jn));
           results.push_back(rewrite(jn));
         }
         else
         {
           Assert(jn.getMetaKind() == kind::metakind::PARAMETERIZED);
+          jobs.push_back(Job::makeSave(jn));
           jobs.push_back(Job::makeCombine(jn.getKind(), jn.getNumChildren() + 1));
           jobs.push_back(Job::makeEval(jn.getOperator()));
           for (const Node child : jn)
@@ -666,6 +686,13 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
         break;
       }
 
+      case SAVE:
+      {
+        Node jn = j.d_nodes[0];
+        cacheWrite(cache, jn, ban, results.back());
+        break;
+      }
+
       default:
       {
         break;
@@ -685,6 +712,7 @@ const std::vector<Node>& FunDefEvaluator::getDefinitions() const
 {
   return d_funDefs;
 }
+
 Node FunDefEvaluator::getDefinitionFor(Node f) const
 {
   std::map<Node, FunDefInfo>::const_iterator it = d_funDefMap.find(f);
@@ -694,6 +722,7 @@ Node FunDefEvaluator::getDefinitionFor(Node f) const
   }
   return Node::null();
 }
+
 Node FunDefEvaluator::getLambdaFor(Node f) const
 {
   std::map<Node, FunDefInfo>::const_iterator it = d_funDefMap.find(f);
@@ -705,6 +734,73 @@ Node FunDefEvaluator::getLambdaFor(Node f) const
                       it->second.d_body);
   }
   return Node::null();
+}
+
+bool FunDefEvaluator::setHasKey(const std::set<Node>& nodes, const Node node)
+{
+  return nodes.find(node) != nodes.end();
+}
+
+bool FunDefEvaluator::subset(const std::set<Node>& nodes1, const std::set<Node>& nodes2)
+{
+  return std::includes(nodes2.begin(), nodes2.end(), nodes1.begin(), nodes1.end());
+}
+
+Node FunDefEvaluator::cacheRead(Cache& cache, const Node t, const std::set<Node>& beta)
+{
+  if (mapHasKey(cache, t))
+  {
+    for (const std::pair<std::set<Node>, Node>& entry : cache[t])
+    {
+      const std::set<Node>& gamma = std::get<0>(entry);
+      if (subset(gamma, beta))
+      {
+        return std::get<1>(entry);
+      }
+    }
+  }
+
+  return Node::null();
+}
+
+void FunDefEvaluator::cacheWrite(Cache& cache, const Node t, const std::set<Node>& beta, const Node u)
+{
+  typedef std::pair<std::set<Node>, Node> EntryElt;
+  std::set<Node> beta_copy;
+  beta_copy.insert(beta.begin(), beta.end());
+  const EntryElt& new_entry_elt = EntryElt{beta_copy, u};
+  if (mapHasKey(cache, t))
+  {
+    std::vector<EntryElt>& elts = cache[t];
+    bool replace = false;
+    size_t replace_pos = 0;
+    for (size_t i = 0; i < elts.size(); ++i)
+    {
+      const std::set<Node>& gamma = std::get<0>(elts[i]);
+      if (subset(beta, gamma))
+      {
+        replace = true;
+        replace_pos = i;
+        break;
+      }
+      else
+      {
+        Assert(!subset(gamma, beta));
+      }
+    }
+    if (replace)
+    {
+      elts[replace_pos] = new_entry_elt;
+    }
+    else
+    {
+      elts.push_back(new_entry_elt);
+    }
+  }
+  else
+  {
+    cache[t] = std::vector<EntryElt>{new_entry_elt};
+  }
 }
 
 }  // namespace quantifiers
