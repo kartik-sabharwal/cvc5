@@ -25,10 +25,13 @@ class SymbolicEvaluator : public QuantifiersModule
   std::string identify() const override;
  private:
   void setUpEvaluator();
+  void evaluate();
   void printPlusTerms();
   FunDefEvaluator d_evaluator;
   bool d_set_up_evaluator;
+  bool d_evaluated;
   size_t d_round;
+  const uint64_t d_fuel = options().quantifiers.symbolicEvaluatorFuel;
 };
 
 }  // namespace quantifiers

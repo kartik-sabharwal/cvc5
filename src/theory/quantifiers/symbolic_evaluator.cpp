@@ -14,14 +14,48 @@ SymbolicEvaluator::SymbolicEvaluator(Env& env,
       d_evaluator(env, qs)
 {
   d_set_up_evaluator = false;
+  d_evaluated = false;
   d_round = 0;
 }
+
 SymbolicEvaluator::~SymbolicEvaluator() {}
+
 bool SymbolicEvaluator::needsCheck(Theory::Effort e)
 {
   return d_qstate.getInstWhenNeedsCheck(e);
 }
+
 void SymbolicEvaluator::reset_round(Theory::Effort e) {}
+
+/**
+ * We begin by fetching the asserted universally quantified formulas.  To do
+ * this we need to consult the current first-order model (d_treg.getModel()),
+ * grab from it the number of asserted universally quantified formulas
+ * (getNumAssertedQuantifiers()), go over the formulas
+ * (getAssertedQuantifier()), assert it to the FunDefEvaluator instance
+ * (assertDefinition()).  If it's not a definition the call will return false,
+ * which we can ignore, otherwise it will return true.
+ */
+void SymbolicEvaluator::setUpEvaluator()
+{
+  FirstOrderModel* fom = d_treg.getModel();
+  Cvc5ostream out = Trace("SymbolicEvaluator-setUpEvaluator");
+  out << "(loaded";
+  const size_t n_asserted = fom->getNumAssertedQuantifiers();
+  for (size_t i = 0; i < n_asserted; ++i)
+  {
+    TNode phi = fom->getAssertedQuantifier(i);
+    if (d_evaluator.assertDefinition(phi))
+    {
+      out << " " << QuantAttributes::getFunDefHead(phi);
+    }
+  }
+  out << ")" << std::endl;
+  d_set_up_evaluator = true;
+}
+
+std::string SymbolicEvaluator::identify() const { return "symbolic-evaluator"; }
+
 void SymbolicEvaluator::check(Theory::Effort e, QEffort quant_e)
 {
   if (quant_e != QEFFORT_STANDARD)
@@ -35,16 +69,56 @@ void SymbolicEvaluator::check(Theory::Effort e, QEffort quant_e)
   {
     setUpEvaluator();
   }
-  
-  Trace("SymbolicEvaluator") << "(round)" << std::endl;
 
-  if (d_round == 7)
+  if (!d_evaluated)
   {
-    Trace("SymbolicEvaluator") << getEqualityEngine()->debugPrintEqc();
-
-    printPlusTerms();
+    evaluate();
   }
 }
+
+/**
+ * This function collects all the terms in the equivalence class of true whose
+ * head symbol is "evaluate".  All such terms are treated as evaluation
+ * requests.  The results of these evaluations are printed to a trace stream.
+ * This function scans the available function symbols for one with the name
+ * "evaluate".  It then iterates through the equivalence class of true.
+ * 
+ */
+void SymbolicEvaluator::evaluate()
+{
+  TNode evaluate_sym = Node::null();
+  const TermDb* tdb = getTermDatabase();
+  const size_t n_ops = tdb->getNumOperators();
+  for (size_t i = 0; i < n_ops; ++i)
+  {
+    TNode op = tdb->getOperator(i);
+    if (op.getName() == "evaluate")
+    {
+      evaluate_sym = op;
+      break;
+    }
+  }
+  NodeManager* nm = nodeManager();
+  const eq::EqualityEngine* ee = getEqualityEngine();
+  const TNode true_node = nm->mkConst(true);
+  const TNode true_repr = ee->getRepresentative(true_node);
+  eq::EqClassIterator true_seq = eq::EqClassIterator(true_repr, ee);
+  while (!true_seq.isFinished())
+  {
+    const Node term = *true_seq;
+    ++true_seq;
+    if (term.hasOperator() && term.getOperator() == evaluate_sym)
+    {
+      const Node response = d_evaluator.evaluateDefinitionsSymbolically(term, d_fuel);
+      Trace("SymbolicEvaluator-evaluate")
+      << "(--> " << std::endl
+      << " " << term << std::endl
+      << " " << response << ")" << std::endl;
+    }
+  }
+  d_evaluated = true;
+}    
+
 /**
  * Say we want to print all the terms in the database that have the function
  * symbol plus as their operator.  Before doing anything else we will fetch the
@@ -89,33 +163,6 @@ void SymbolicEvaluator::printPlusTerms()
     // break; // Quit after evaluating the first term in the list.
   }
 }
-/**
- * We begin by fetching the asserted universally quantified formulas.  To do
- * this we need to consult the current first-order model (d_treg.getModel()),
- * grab from it the number of asserted universally quantified formulas
- * (getNumAssertedQuantifiers()), go over the formulas
- * (getAssertedQuantifier()), assert it to the FunDefEvaluator instance
- * (assertDefinition()).  If it's not a definition the call will return false,
- * which we can ignore, otherwise it will return true.
- */
-void SymbolicEvaluator::setUpEvaluator()
-{
-  FirstOrderModel* fom = d_treg.getModel();
-  Cvc5ostream out = Trace("SymbolicEvaluator");
-  out << "(loaded";
-  const size_t n_asserted = fom->getNumAssertedQuantifiers();
-  for (size_t i = 0; i < n_asserted; ++i)
-  {
-    TNode phi = fom->getAssertedQuantifier(i);
-    if (d_evaluator.assertDefinition(phi))
-    {
-      out << " " << QuantAttributes::getFunDefHead(phi);
-    }
-  }
-  out << ")" << std::endl;
-  d_set_up_evaluator = true;
-}
-std::string SymbolicEvaluator::identify() const { return "symbolic-evaluator"; }
 
 }  // namespace quantifiers
 }  // namespace theory

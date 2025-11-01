@@ -333,39 +333,39 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
     Kind d_node_kind;
     size_t d_num_args;
 
-    static Job makeEval(Node n)
+    static Job* makeEval(Node n)
     {
-      return Job{EVAL, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
+      return new Job{EVAL, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
     }
 
-    static Job makeBan(Node n)
+    static Job* makeBan(Node n)
     {
-      return Job{BAN, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
+      return new Job{BAN, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
     }
 
-    static Job makeUnban(Node n)
+    static Job* makeUnban(Node n)
     {
-      return Job{UNBAN, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
+      return new Job{UNBAN, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
     }
 
-    static Job makeCheck(Node n0, Node n1)
+    static Job* makeCheck(Node n0, Node n1)
     {
-      return Job{CHECK, {n0, n1}, Kind::UNDEFINED_KIND, 0};
+      return new Job{CHECK, {n0, n1}, Kind::UNDEFINED_KIND, 0};
     }
 
-    static Job makeBranch(Node n0, Node n1)
+    static Job* makeBranch(Node n0, Node n1)
     {
-      return Job{BRANCH, {n0, n1}, Kind::UNDEFINED_KIND, 0};
+      return new Job{BRANCH, {n0, n1}, Kind::UNDEFINED_KIND, 0};
     }
 
-    static Job makeCombine(Kind k, size_t num_args)
+    static Job* makeCombine(Kind k, size_t num_args)
     {
-      return Job{COMBINE, {Node::null(), Node::null()}, k, num_args};
+      return new Job{COMBINE, {Node::null(), Node::null()}, k, num_args};
     }
 
-    static Job makeSave(Node n)
+    static Job* makeSave(Node n)
     {
-      return Job{SAVE, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
+      return new Job{SAVE, {n, Node::null()}, Kind::UNDEFINED_KIND, 0};
     }
 
     std::string toString() const
@@ -418,7 +418,7 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
     }
   };
 
-  std::vector<Job> jobs;
+  std::vector<Job*> jobs;
   std::vector<Node> results;
   std::set<Node> ban;
   Cache cache;
@@ -429,14 +429,46 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
 
   while (!jobs.empty() && fuel > 0)
   {
+    if (TraceIsOn("eDS-cache"))
+    {
+      std::ostream& msg = Trace("eDS-cache");
+      msg << "(";
+      for (const std::pair<Node, std::vector<std::pair<std::set<Node>, Node>>> mapping : cache)
+      {
+        msg << "(" << std::get<0>(mapping);
+        for (const std::pair<std::set<Node>, Node>& elt : std::get<1>(mapping))
+        {
+          msg << " ({";
+          {
+            bool first = true;
+            for (const Node& in_elt : std::get<0>(elt))
+            {
+              if (first)
+              {
+                first = false;
+              }
+              else
+              {
+                msg << " ";
+              }
+              msg << in_elt;
+            }
+          }
+          msg << "} . " << std::get<1>(elt) << ")";
+        }
+        msg << ")" << std::endl;
+      }
+      msg << ")" << std::endl;
+    }
+
     if (TraceIsOn("evaluateDefinitionsSymbolically"))
     {
-      std::ostringstream msg;
+      std::ostream& msg = Trace("evaluateDefinitionsSymbolically");
       msg << "(state" << std::endl;
       msg << "(jobs" << std::endl;
-      for (const Job& job : jobs)
+      for (const Job* job : jobs)
       {
-        msg << job.toString() << std::endl;
+        msg << job->toString() << std::endl;
       }
       msg << ")" << std::endl; // jobs
       msg << "(results" << std::endl;
@@ -446,28 +478,29 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
       }
       msg << ")" << std::endl; // results
       msg << ")" << std::endl; // state
-      Trace("evaluateDefinitionsSymbolically") << msg.str();
     }
 
     --fuel;
 
-    Job j = jobs.back();
+    Job* j = jobs.back();
     jobs.pop_back();
 
-    switch (j.d_job_kind)
+    switch (j->d_job_kind)
     {
       case EVAL: 
       {
-        Node jn = j.d_nodes[0];
+        Node jn = j->d_nodes[0];
+        Trace("evaluateDefinitionsSymbolically-eval") << "(EVAL " << jn << " " << ban << ")" << std::endl;
         Node cached = cacheRead(cache, jn, ban);
         if (!cached.isNull())
         {
-          Trace("evaluateDefinitionsSymbolically") << "(cache " << jn << " " << cached << ")" << std::endl;
+          Trace("evaluateDefinitionsSymbolically-eval") << "(LOAD " << cached << " " << ban << ")" << std::endl;
           results.push_back(cached);
         }
         else if (jn.isConst())
         {
           results.push_back(jn);
+          Trace("evaluateDefinitionsSymbolically-save") << "(SAVE *skip*)" << std::endl;
         }
         // else if (jn.isVar() && jn.getType().isDatatype() && ee->hasTerm(jn))
         // {
@@ -492,6 +525,7 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
         else if (jn.isVar())
         {
           results.push_back(jn);
+          Trace("evaluateDefinitionsSymbolically-save") << "(SAVE *skip*)" << std::endl;
         }
         else if (jn.getKind() == Kind::ITE)
         {
@@ -529,22 +563,22 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
 
       case BAN: 
       {
-        Node func_sym = j.d_nodes[0];
+        Node func_sym = j->d_nodes[0];
         ban.insert(func_sym);
         break;
       }
 
       case UNBAN:
       {
-        Node func_sym = j.d_nodes[0];
+        Node func_sym = j->d_nodes[0];
         ban.erase(func_sym);
         break;
       }
 
       case CHECK: 
       {
-        Node fallback = j.d_nodes[0];
-        Node func_sym = j.d_nodes[1];
+        Node fallback = j->d_nodes[0];
+        Node func_sym = j->d_nodes[1];
         Node cand = results.back();
         results.pop_back();
         bool found_ite = false;
@@ -584,8 +618,8 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
       case BRANCH: 
       {
         Node test = results.back();
-        Node conseq = j.d_nodes[0];
-        Node alt = j.d_nodes[1];
+        Node conseq = j->d_nodes[0];
+        Node alt = j->d_nodes[1];
         results.pop_back();
         if (test.isConst())
         {
@@ -608,8 +642,8 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
 
       case COMBINE: 
       {
-        Kind k = j.d_node_kind;
-        size_t num_args = j.d_num_args;
+        Kind k = j->d_node_kind;
+        size_t num_args = j->d_num_args;
         std::vector<Node> children;
         for (size_t i = 0; i < num_args; ++i)
         {
@@ -688,7 +722,8 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
 
       case SAVE:
       {
-        Node jn = j.d_nodes[0];
+        Node jn = j->d_nodes[0];
+        Trace("evaluateDefinitionsSymbolically-save") << "(SAVE " << jn << " " << ban << ")" << std::endl;
         cacheWrite(cache, jn, ban, results.back());
         break;
       }
@@ -698,6 +733,8 @@ Node FunDefEvaluator::evaluateDefinitionsSymbolically(Node n, size_t fuel) const
         break;
       }
     }
+
+    delete j;
   }
 
   Node result = results.back();
