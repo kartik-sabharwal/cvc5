@@ -67,6 +67,7 @@ ConflictConjectureGenerator::ConflictConjectureGenerator(
   d_subOptions.write_quantifiers().conjectureGen = false;
   d_subOptions.write_quantifiers().contextualEnumerator = false;
   d_subOptions.write_quantifiers().conflictConjectureGen = false;
+  d_subOptions.write_quantifiers().poolInst = false;
   smt::SetDefaults::disableChecking(d_subOptions);
 }
 
@@ -365,8 +366,22 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
   for (const Node& eq : candDeq)
   {
     Trace("ccgen-debug") << "- disequality: " << eq << std::endl;
+    std::unordered_set<Node> lhs_syms;
+    expr::getSymbols(eq[0], lhs_syms);
+    std::unordered_set<Node> rhs_syms;
+    expr::getSymbols(eq[1], rhs_syms);
     std::unordered_set<Node> syms;
-    expr::getSymbols(eq, syms);
+    syms.insert(lhs_syms.begin(), lhs_syms.end());
+    syms.insert(rhs_syms.begin(), rhs_syms.end());
+    const bool lhs_has_skolem = std::any_of(lhs_syms.begin(), lhs_syms.end(), [](TNode n){ return n.getKind() == Kind::SKOLEM; });
+    const bool rhs_has_skolem = std::any_of(rhs_syms.begin(), rhs_syms.end(), [](TNode n){ return n.getKind() == Kind::SKOLEM; });
+    const bool eq_has_func_sym = std::any_of(syms.begin(), syms.end(), [](TNode n){ return n.isVar(); });
+    if (!lhs_has_skolem || !rhs_has_skolem || !eq_has_func_sym)
+    {
+      Trace("ccgen-debug") << "...filter " << eq << std::endl;
+      continue;
+    }
+    Trace("ccgen-debug1") << "Disequality " << eq << " has symbols " << syms << std::endl;
     Subs ss;
     for (const Node& s : syms)
     {
@@ -701,7 +716,7 @@ std::string ConflictConjectureGenerator::identify() const
 void ConflictConjectureGenerator::checkDisequality(const Node& eq)
 {
   d_conjBuffer.clear();
-  Trace("ccgen") << "checkDisequality " << eq << std::endl;
+  Trace("ccgen1") << "checkDisequality " << eq << std::endl;
   std::vector<Node> vars;
   for (size_t i = 0; i < 2; i++)
   {
@@ -769,6 +784,8 @@ void ConflictConjectureGenerator::checkDisequality(const Node& eq)
   }
   Trace("cconjGen") << ")" << std::endl;
 
+  findCongruenceCandidates();
+  
   if (TraceIsOn("ConflictConjectureGenerator::d_conjBuffer"))
   {
     Trace("ConflictConjectureGenerator::d_conjBuffer") << "(d_conjBuffer";
@@ -3157,6 +3174,104 @@ void ConflictConjectureGenerator::debugPrintGenTrie(GenTrie& gt)
     }
   }
   Trace("ConflictConjectureGenerator::d_gtrie") << ")" << std::endl;
+}
+
+void ConflictConjectureGenerator::findCongruenceCandidates()
+{
+  std::unordered_set<Node> source;
+  source.insert(d_conjBuffer.begin(), d_conjBuffer.end());
+  std::unordered_set<Node> to_remove;
+  std::unordered_set<Node> to_add;
+  bool at_fixed_point = false;
+  
+  while (!at_fixed_point)
+  {
+    at_fixed_point = true;
+
+    for (const Node& cand : source)
+    {
+      const Node& lhs = cand[0];
+      const Node& rhs = cand[1];
+
+      if (!lhs.hasOperator() || !rhs.hasOperator())
+      {
+        continue;
+      }
+
+      const Node& lhs_op = lhs.getOperator();
+      const Node& rhs_op = rhs.getOperator();
+
+      if (lhs_op != rhs_op)
+      {
+        continue;
+      }
+
+      if (lhs.getKind() == Kind::APPLY_UF)
+      {
+        std::vector<size_t> positions;
+        for (size_t i = 0; i < lhs.getNumChildren(); ++i)
+        {
+          if (lhs[i] != rhs[i])
+          {
+            positions.push_back(i);
+          }
+        }
+        if (positions.size() != 1)
+        {
+          continue;
+        }
+        const size_t position = positions[0];
+        if (!lhs[position].getType().isDatatype())
+        {
+          continue;
+        }
+        to_add.insert(lhs[position].eqNode(rhs[position]));
+        at_fixed_point = false;
+      }
+      else if (lhs.getKind() == Kind::APPLY_CONSTRUCTOR)
+      {
+        std::vector<size_t> positions;
+        bool skip = false;
+        for (size_t i = 0; i < lhs.getNumChildren(); ++i)
+        {
+          if (lhs[i].getType().isDatatype())
+          {
+            if (lhs[i] != rhs[i])
+            {
+              positions.push_back(i);
+            }
+          }
+          else if (lhs[i] != rhs[i])
+          {
+            skip = true;
+          }
+        }
+        if (skip)
+        {
+          continue;
+        }
+        else
+        {
+          for (const size_t i : positions)
+          {
+            to_add.insert(lhs[i].eqNode(rhs[i]));
+          }
+          to_remove.insert(cand);
+          at_fixed_point = false;
+        }
+      }
+    }
+    source.clear();
+    source.insert(to_add.begin(), to_add.end());
+    d_conjBuffer.insert(to_add.begin(), to_add.end());
+    to_add.clear();
+  }
+
+  for (const Node& cand : to_remove)
+  {
+    d_conjBuffer.erase(cand);
+  }
+  to_remove.clear();
 }
 
 const Node& Decision::getPat()
