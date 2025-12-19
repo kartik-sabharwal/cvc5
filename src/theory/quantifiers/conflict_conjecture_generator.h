@@ -396,6 +396,32 @@ class ConflictConjectureGenerator : public QuantifiersModule
 
   /** I'll document this after I finish writing it. */
   const std::unordered_set<Node> collectRecursivelyDefinedFunctionSymbols(quantifiers::FirstOrderModel* mdl);
+
+  /**
+   * Let's say we're looking at the candidate t = u where t and u are terms
+   * built with abstraction variables, uninterpreted function symbols, and
+   * constructor symbols.  Suppose t and u have the same root uninterpreted
+   * function symbol f: t can be written as f(t_1 ... t_n) and u can be written
+   * as f(u_1 .. u_n).  If there is exactly one i between 1 and n such that t_i
+   * and u_i are syntactically distinct then we add t_i = u_i as a new
+   * candidate.  Suppose instead that t and u have the same root constructor
+   * symbol C: t is C(t_1 ... t_n) and u is C(u_1 ... u_n).  We eventually
+   * remove the conjecture t = u.  For any i such that t_i and u_i are
+   * datatype-sorted and syntactially distinct we add t_i = u_i as a conjecture.
+   * If we find at least one new conjecture in one iteration we perform another
+   * iteration on just the new conjectures.  We stop once we hit a fixed point.
+   *
+   * The state for each iteration is determined by sets source, to_add and
+   * to_remove as well as boolean at_fixed_point.  source starts with everything
+   * in d_conjBuffer.  to_add and to_remove start empty.  In an iteration we run
+   * through the elements of source.  New candidates are added to to_add.
+   * Candidates to eventually discard are added to to_remove.  Once we've
+   * traversed source we clear it.  We dump the contents of to_add once into
+   * source and once into d_conjBuffer.  Then we clear to_add as well.  Once we
+   * reach a fixed point we remove the contents of to_remove from d_conjBuffer
+   * and then clear to_remove.
+   */
+  void findCongruenceCandidates();
 };
 
 /**
