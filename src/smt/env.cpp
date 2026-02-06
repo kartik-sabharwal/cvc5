@@ -44,6 +44,7 @@ Env::Env(NodeManager* nm, const Options* opts)
       d_context(new context::Context()),
       d_userContext(new context::UserContext()),
       d_preserved_formulas(d_context.get()),
+      d_recursive_definitions(d_context.get()),
       d_pfManager(nullptr),
       d_proofNodeManager(nullptr),
       d_rewriter(new theory::Rewriter(nm)),
@@ -57,7 +58,7 @@ Env::Env(NodeManager* nm, const Options* opts)
       d_boolTermSkolems(d_userContext.get())
 {
   // @Kartik.
-  d_inference_stream = new std::ofstream("cvc5-inferences.out", std::ios::app);
+  // d_inference_stream = new std::ofstream("cvc5-inferences.out", std::ios::app);
   // ********
 
   if (opts != nullptr)
@@ -106,12 +107,12 @@ void Env::shutdown()
   d_resourceManager.reset(nullptr);
 
   // @Kartik.
-  d_inference_stream->close();
-  delete d_inference_stream;
+  // d_inference_stream->close();
+  // delete d_inference_stream;
   // ********
 }
 
-std::ofstream* Env::getInferenceStream() const { return d_inference_stream; };
+// std::ofstream* Env::getInferenceStream() const { return d_inference_stream; };
 
 context::Context* Env::getContext() { return d_context.get(); }
 
@@ -419,6 +420,16 @@ const context::CDList<Node>& Env::getPreservedFormulas()
 void Env::preserveFormula(const Node& phi)
 {
   d_preserved_formulas.push_back(phi);
-}    
+}
+
+const context::CDList<Node>& Env::getRecursiveDefinitions()
+{
+  return d_recursive_definitions;
+}
+
+void Env::addRecursiveDefinition(const Node& phi)
+{
+  d_recursive_definitions.push_back(phi);
+}
 
 }  // namespace cvc5::internal

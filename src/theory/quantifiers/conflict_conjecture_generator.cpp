@@ -292,8 +292,8 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
   if (d_iuqf_populated)
   {
     // Go over all universally quantified formulas and print the ones that aren't in `d_iuqf`.
-    std::ofstream& inference_stream = *d_env.getInferenceStream();
-    inference_stream << "(new-quantified-formulas";
+    // std::ofstream& inference_stream = *d_env.getInferenceStream();
+    // inference_stream << "(new-quantified-formulas";
     // n_aqfs is 'number of asserted quantified formulas'.
     size_t naq = model->getNumAssertedQuantifiers();
     for (size_t i = 0; i < naq; i++)
@@ -305,10 +305,10 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
 
       if (!is_phi_init)
       {
-        inference_stream << std::endl << phi;
+        // inference_stream << std::endl << phi;
       }
     }
-    inference_stream << std::endl << ")" << std::endl;
+    // inference_stream << std::endl << ")" << std::endl;
   }
   else
   {
@@ -3057,8 +3057,8 @@ bool ConflictConjectureGenerator::filterManual(const Node conj_body, int tested)
     {
       d_switched_off = true;
 
-      std::ofstream* inference_stream = d_env.getInferenceStream();
-      (*inference_stream) << "********************************************************************************" << std::endl;
+      // std::ofstream* inference_stream = d_env.getInferenceStream();
+      // (*inference_stream) << "********************************************************************************" << std::endl;
     }
   }
 

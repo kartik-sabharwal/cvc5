@@ -1010,6 +1010,14 @@ name   = "Quantifiers"
   type       = "bool"
   default    = "false"
   help       = "prune candidate conjectures using the built-in interpreter on sygus-generated terms"
+
+[[option]]
+  name       = "optimizeDefineFunRec"
+  category   = "expert"
+  long       = "optimize-define-fun-rec"
+  type       = "bool"
+  default    = "false"
+  help       = "Split a single define-fun-rec into many assertions each with its own quantifier pattern based on match statements in the definition."
   
 ### Synthesis options
 

@@ -595,17 +595,27 @@ void SolverEngine::defineFunctionsRec(
        << "  #function bodies : " << formulas.size() << "\n";
     throw ModalException(ss.str());
   }
+
+  Trace("smt") << "Checkpoint A" << endl;
+
   for (unsigned i = 0, size = funcs.size(); i < size; i++)
   {
     // check formal argument list
     debugCheckFormals(formals[i], funcs[i]);
+
+    Trace("smt") << "Checkpoint A.1" << endl;
+
     // type check body
     debugCheckFunctionBody(formulas[i], formals[i], funcs[i]);
   }
 
+  Trace("smt") << "Checkpoint B" << endl;
+
   NodeManager* nm = d_env->getNodeManager();
   for (unsigned i = 0, size = funcs.size(); i < size; i++)
   {
+    Trace("smt") << "Checkpoint C." << i << endl;
+
     // we assert a quantified formula
     Node func_app;
     // make the function application
@@ -637,8 +647,23 @@ void SolverEngine::defineFunctionsRec(
     // directly, since we should call a private member method since we have
     // already ensuring this SolverEngine is initialized above.
     // add define recursive definition to the assertions
-    d_smtSolver->getAssertions().addDefineFunDefinition(lem, global);
+    d_env->addRecursiveDefinition(lem);
+
+    if (options().quantifiers.optimizeDefineFunRec)
+    {
+      std::vector<Node> assertions = optimizeFunctionRec(funcs[i], formals[i], formulas[i]);
+      for (const Node& assertion : assertions)
+      {
+        d_smtSolver->getAssertions().assertFormula(assertion);
+      }
+    }
+    else
+    {
+      d_smtSolver->getAssertions().addDefineFunDefinition(lem, global);
+    }
   }
+
+  Trace("smt") << "Checkpoint D" << endl;
 }
 
 void SolverEngine::defineFunctionRec(Node func,
@@ -653,6 +678,183 @@ void SolverEngine::defineFunctionRec(Node func,
   std::vector<Node> formulas;
   formulas.push_back(formula);
   defineFunctionsRec(funcs, formals_multi, formulas, global);
+}
+
+std::vector<Node> SolverEngine::optimizeFunctionRec(Node func,
+                                                    const std::vector<Node>& formals,
+                                                    Node formula)
+{
+  std::vector<Node> result{};
+
+  struct Job
+  {
+    Node pat;
+    Node expr;
+    std::unordered_set<Node> cxt;
+  };
+
+  NodeManager* nm = d_env->getNodeManager();
+
+  // We populate the job stack with the initial job.
+  // We use pointers to Job structs to avoid memory issues.
+  std::vector<Job*> jobs = {};
+  {
+    // We define the initial job.
+    Job* job0 = new Job{Node::null(), formula, std::unordered_set<Node>{}};
+    // We populate the context of the initial job.
+    job0->cxt.insert(formals.begin(), formals.end());
+    {  // where
+      // We construct the pattern associated with the initial job.
+      Node pat0 = Node::null();
+      { // where
+        std::vector<Node> pat0_vec{func};
+        pat0_vec.insert(pat0_vec.end(), formals.begin(), formals.end());
+        pat0 = nm->mkNode(Kind::APPLY_UF, pat0_vec);
+      }
+      // We attach the constructed pattern to the initial job.
+      job0->pat = pat0;
+    }
+    // We add the initial job to the job stack.
+    jobs.push_back(job0);
+  }
+  // The job stack is now ready.
+
+  // Pop jobs from the job stack one-by-one
+  while (!jobs.empty())
+  {
+    // We extract the features of the top job.
+    Job* job = jobs.back();
+    Node j_pat = job->pat;
+    Node j_expr = job->expr;
+    Kind j_kind = j_expr.getKind();
+    std::unordered_set<Node> j_cxt = job->cxt;
+    // Have extracted features of the top job.
+    // We remove it from the stack.
+    jobs.pop_back();
+
+    switch (j_kind)
+    {
+      case Kind::MATCH:
+      {
+        // The variable whose value we're matching against.
+        Node var = j_expr[0];
+
+        // We want to construct a new job for each clause.
+        // child #1 and onwards of j_expr are the clauses.
+        for (size_t i = 1; i < j_expr.getNumChildren(); ++i)
+        {
+          Node clause = j_expr[i];
+          Kind cl_kind = clause.getKind();
+          Node cl_pat = Node::null();
+          Node cl_body = Node::null();
+          std::unordered_set<Node> cl_vars{};
+
+          switch (cl_kind)
+          {
+            case Kind::MATCH_CASE:
+            {
+              cl_pat = clause[0];
+              cl_body = clause[1];
+              break;
+            }
+
+            case Kind::MATCH_BIND_CASE:
+            {
+              {
+                TNode tmp = clause[0];
+                cl_vars.insert(tmp.begin(), tmp.end());
+              }
+              cl_pat = clause[1];
+              cl_body = clause[2];
+              break;
+            }
+
+            default:
+            {
+              break;
+            }
+          }
+
+          // ch_job is short for "child job".
+          {
+            Job* ch_job = new Job{Node::null(), cl_body, std::unordered_set<Node>{}};
+            jobs.push_back(ch_job);
+            {
+              {
+                Subs sigma;
+                sigma.add(var, cl_pat);
+                ch_job->pat = sigma.apply(j_pat);
+              }
+              {
+                std::unordered_set<Node>& ch_cxt = ch_job->cxt;
+                ch_cxt.insert(j_cxt.begin(), j_cxt.end());
+                ch_cxt.insert(cl_vars.begin(), cl_vars.end());
+                {
+                  std::unordered_set<Node>::iterator var_pos = ch_cxt.find(var);
+                  if (var_pos != ch_cxt.end())
+                  {
+                    ch_cxt.erase(var_pos);
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        break;
+      }
+
+      default:
+      {
+        // We want to add a new quantified formula to `result`.
+        // We'll call this new formula `rule`.
+        // It will have the form:
+        //
+        //     (forall j_cxt (!
+        //       (= j_pat j_expr)
+        //       :pattern (j_pat)))
+        //
+        // To construct the rule, we will first define the bound variable list
+        // `rule_bvs`, then the equality `rule_body`, then the pattern list
+        // `rule_pats`, and finally `rule` itself.
+
+        Node rule_body = nm->mkNode(Kind::EQUAL, j_pat, j_expr);
+
+        switch (j_cxt.size())
+        {
+          case 0:
+          {
+            result.push_back(rule_body);
+
+            break;
+          }
+
+          default:
+          {
+            std::vector<Node> rule_bvs_vec{};
+            rule_bvs_vec.insert(rule_bvs_vec.begin(), j_cxt.begin(), j_cxt.end());
+            Node rule_bvs = nm->mkNode(Kind::BOUND_VAR_LIST, rule_bvs_vec);
+
+            Node rule_pat = nm->mkNode(Kind::INST_PATTERN, std::vector<Node>{j_pat});
+            Node rule_pats = nm->mkNode(Kind::INST_PATTERN_LIST, rule_pat);
+
+            Node rule = nm->mkNode(Kind::FORALL, rule_bvs, rule_body, rule_pats);
+
+            result.push_back(rule);
+
+            break;
+          }
+        }
+
+        break;
+      }
+    }
+
+    // We delete the job through its pointer.
+    delete job;
+  }
+
+  return result;
 }
 
 TheoryModel* SolverEngine::getAvailableModel(const char* c) const

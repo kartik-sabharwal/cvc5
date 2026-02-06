@@ -321,6 +321,12 @@ class CVC5_EXPORT SolverEngine
                          bool global = false);
 
   /**
+   * Split a single recursive definition into multiple assertions based on pattern-matching.
+   * Each assertion has its own quantifier patterns.
+   */
+  std::vector<Node> optimizeFunctionRec(Node func, const std::vector<Node>& formals, Node formula);
+
+  /**
    * Add a formula to the current context: preprocess, do per-theory
    * setup, use processAssertionList(), asserting to T-solver for
    * literals and conjunction of literals. Note this formula will
