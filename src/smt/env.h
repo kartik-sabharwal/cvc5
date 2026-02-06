@@ -341,6 +341,10 @@ class Env
   const context::CDList<Node>& getPreservedFormulas();
 
   void preserveFormula(const Node&);
+
+  const context::CDList<Node>& getRecursiveDefinitions();
+
+  void addRecursiveDefinition(const Node& phi);
   
  private:
   /* Private initialization ------------------------------------------------- */
@@ -364,8 +368,10 @@ class Env
   std::unique_ptr<context::UserContext> d_userContext;
   /** @Kartik.  This will preserve some formulas that are about to be pre-processed. */
   context::CDList<Node> d_preserved_formulas;
+  /** @Kartik.  This will save the original forms of recursive function definitions. */
+  context::CDList<Node> d_recursive_definitions;
   /** @Kartik.  This will store a handle to a file to which we'll print our debugging information. */
-  std::ofstream* d_inference_stream;
+  // std::ofstream* d_inference_stream;
   /**
    * The proof manager of the solver engine.
    */
