@@ -355,8 +355,18 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     Node n = *eqc;
     if (n.getKind() == Kind::EQUAL)
     {
-      Trace("cconjGen") << "(quote " << n << ")" << std::endl;
-      candDeq.push_back(n);
+      // Reject if it's not a disequality between datatype terms.
+      // We don't want to mine conjectures from disequalities of the form:
+      //
+      //     nat-to-int(plus(sk1, sk2)) != nat-to-int(succ(plus(sk1, zero)))
+      //
+      // At least we don't want to do this right now.
+
+      if (n[0].getType().isDatatype())
+      {
+        Trace("cconjGen") << "(quote " << n << ")" << std::endl;
+        candDeq.push_back(n);
+      }
     }
     ++eqc;
   }
