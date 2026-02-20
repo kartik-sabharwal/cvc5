@@ -59,6 +59,7 @@ ConflictConjectureGenerator::ConflictConjectureGenerator(
   d_iuqf = std::unordered_set<Node>{};
   d_false = nodeManager()->mkConst(false);
   d_set_up_fun_def_evaluator = false;
+  d_banned = std::unordered_set<Node>{};
 
   d_subOptions.copyValues(options());
   d_subOptions.write_quantifiers().instMaxRounds = 20;
@@ -115,11 +116,13 @@ QuantifiersModule::QEffort ConflictConjectureGenerator::needsModel(
  * 5.  Add 'lem' as a pending lemma.
  * 6.  Add 'phi' with 'false' as a pending phase requirement.
  *
- * The way to look at the entire list of function symbols is to use `getTermDatabase()`, `getNumOperators()` and `getOperator()`.
- * The way to create bound variables is to use `NodeManager::mkBoundVar()`.
- * You will also need the kinds `APPLY_UF`, `BOUND_VAR_LIST`, and `FORALL`.
- * You will need `nodeManager()`, `mkNode()`, `negate()`, `eqNode()`, `orNode()`.
- * To send the lemma you'll need the member functions `addPendingLemma()` and `addPendingPhaseRequiement()` and the field `d_qim`.
+ * The way to look at the entire list of function symbols is to use
+ * `getTermDatabase()`, `getNumOperators()` and `getOperator()`.  The way to
+ * create bound variables is to use `NodeManager::mkBoundVar()`.  You will also
+ * need the kinds `APPLY_UF`, `BOUND_VAR_LIST`, and `FORALL`.  You will need
+ * `nodeManager()`, `mkNode()`, `negate()`, `eqNode()`, `orNode()`.  To send the
+ * lemma you'll need the member functions `addPendingLemma()` and
+ * `addPendingPhaseRequiement()` and the field `d_qim`.
  */
 void ConflictConjectureGenerator::shortCircuit()
 {
@@ -263,14 +266,14 @@ void ConflictConjectureGenerator::shortCircuit()
     }
   }
   std::cout << "Sending " << choice << std::endl;
-  
+
   // const Node lem = choice.orNode(choice.negate());
   d_qim.addPendingLemma(choice, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
   // d_qim.addPendingPhaseRequirement(choice, false);
-  
+
   // Let's 'remember' that we've called `shortCircuit()` once.  We don't need to call it multiple times.
   d_short_circuited = true;
-  
+
   return;
 }
 
@@ -317,7 +320,7 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
     {
       Node phi = model->getAssertedQuantifier(i);
       d_iuqf.insert(phi);
-    }    
+    }
 
     d_iuqf_populated = true;
   }
@@ -330,7 +333,7 @@ void ConflictConjectureGenerator::check(Theory::Effort e, QEffort quant_e)
   // if (!d_set_up_fun_def_evaluator)
   // {
   //   setUpFunDefEvaluator();
-  // } 
+  // }
 
   Trace("ccgen-debug") << "Refresh function definitions..." << std::endl;
   std::unordered_set<Node> qsyms;
@@ -452,7 +455,7 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
   // This stores the current interpretation of each variable symbol and each
   // function symbol.
   quantifiers::FirstOrderModel* mdl = d_treg.getModel();
-  
+
   // These are all the function symbols that *might* be recursively defined.  If
   // there is any doubt we choose to err on the side of caution.
   const std::unordered_set<Node> rec_fun_syms = collectRecursivelyDefinedFunctionSymbols(mdl);
@@ -476,7 +479,7 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
   //   }
   //   Trace("build-grammar-from-context") << "}" << std::endl;
   // }
-  
+
   // We'll use this to store the equalities in the equivalence class of false.
   std::vector<Node> assm_false_eqns;
 
@@ -493,14 +496,14 @@ void ConflictConjectureGenerator::buildGrammarFromContext()
   {
     // A term that is equivalent to false.
     Node false_term = *false_it;
-  
+
     // Is the term an equality?
     if (false_term.getKind() == Kind::EQUAL)
     {
       // If so, add it to assm_false_eqns.
       assm_false_eqns.push_back(false_term);
     }
-  
+
     // Move on to the next term in the equivalence class.
     ++false_it;
   }
@@ -622,7 +625,7 @@ const std::unordered_set<Node> ConflictConjectureGenerator::collectRecursivelyDe
 
       // Let's print it.
       // Trace("collect-recursive") << fla << std::endl;
-      
+
       // The body of the aforementioned formula.
       const Node& body = fla[1];
 
@@ -691,7 +694,7 @@ const std::unordered_set<Node> ConflictConjectureGenerator::collectRecursivelyDe
             }
           }
         }
-        
+
         // We presume that if the body fits the shape of a recursive definition
         // then we've set REC_FUN_SYM to be non-null.  If it is non-null we
         // should add it to the list of recursive function symbols.
@@ -700,11 +703,11 @@ const std::unordered_set<Node> ConflictConjectureGenerator::collectRecursivelyDe
           rec_fun_syms.insert(rec_fun_sym);
         }
       }
-    }      
+    }
   }
 
   // Trace("collect-recursive") << std::endl;
-  
+
   return rec_fun_syms;
 }
 
@@ -785,7 +788,7 @@ void ConflictConjectureGenerator::checkDisequality(const Node& eq)
   Trace("cconjGen") << ")" << std::endl;
 
   findCongruenceCandidates();
-  
+
   if (TraceIsOn("ConflictConjectureGenerator::d_conjBuffer"))
   {
     Trace("ConflictConjectureGenerator::d_conjBuffer") << "(d_conjBuffer";
@@ -955,7 +958,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   // perspective, getGeneralizationsInternal(v) attempts to make d_eqcGenRec[v]
   // a better approximation of all vertices reachable from v by adding new
   // vertices.
-  
+
   // This is the number of expansions we will perform.  Since performing such an
   // expansion is equivalent to taking one step in the random walk, it can be
   // seen as the intended length of our random walk.
@@ -979,7 +982,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   // subs will record the equivalence class variables we have picked to expand
   // during our random walk as well as the expansions we have chosen.  We can
   // think of it as a summary of the walk itself.
-  // 
+  //
   // **Note**.  By choosing to represent our walk as a substitution we force
   // ourselves to expand an equivalence class variable the same way each time we
   // encounter it.  It might be worth exploring a random walk strategy that
@@ -1006,7 +1009,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     //   Trace("getGeneralizationsInternal") << " (list " << std::get<0>(entry) << " " << std::get<1>(entry) << ")";
     // }
     // Trace("getGeneralizationsInternal") << "\"vc\"" << " " << vc << ")";
-    
+
     // Before we try to expand vc let's ensure that it's truly an equivalence
     // class variable!
     Assert(d_bvToEqc.find(vc) != d_bvToEqc.end());
@@ -1028,7 +1031,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
         }
 
         Trace("ccgen-debug") << expansion;
-        
+
         first_time = false;
       }
       Trace("ccgen-debug") << "]" << std::endl;
@@ -1141,7 +1144,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
         fvs.insert(fvs.begin() + rindex, var);
       }
     }
-    
+
     // Trace("ccgen-debug-expand") << "...expand to " << gs << std::endl;
     // std::vector<Node> newVars;
     // if (g.getNumChildren() > 0)
@@ -1180,7 +1183,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     // Trace("ccgen-debug") << "...free variables now " << fvs << std::endl;
 
     Trace("cconjGen") << "(quote " << cur << ")" << std::endl;
-    
+
     // cur is now a candidate term.  Recalling the description we had provided
     // earlier: we have reached cur during a random walk that started at v.
     // Therefore we should record cur in grecs.  (Recall also that grecs is a
@@ -1196,7 +1199,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     {
       break;
     }
-    
+
     // We will expand fvs[rindex] in the next iteration of this loop.
     rindex = Random::getRandom().pick(0, fvs.size() - 1);
   }
@@ -1294,7 +1297,7 @@ void ConflictConjectureGenerator::findCompatible(
     const ConflictConjectureGenerator::State st)
 {
   // *Variable names*
-  // 
+  //
   // 'tgt_exp' --> 'target expansion', 'tgt_vars' --> 'target
   // variables', 'rt_var' --> 'root variable', 'cur' --> 'cursor',
   // 'cur_vars' --> 'variables in path to cursor', 'n_inter' -->
@@ -1647,7 +1650,7 @@ void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
                                                       const Node& rhs_cand)
 {
   // *Argument names*
-  // 
+  //
   // lhs_cand --> 'left hand side of candidate equality conjecture',
   // rhs_cand --> 'right hand side of candidate equality conjecture'.
 
@@ -1656,7 +1659,7 @@ void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
   // This function expects that the set of equivalence class variables
   // occurring in `lhs_cand` is a superset of the equivalence class
   // variables occuring in `rhs_cand`.
-  
+
   // If `lhs_cand` and `rhs_cand` are identical then the candidate
   // conjecture will be trivially valid, not to mention useless.  We
   // are instead looking for a candidate that is not deductively
@@ -1681,7 +1684,7 @@ void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
     // `rhs_cand` must be an application of some operator,
     // specifically a constructor or an uninterpreted function.
 
-    
+
     if (expr::hasSubterm(rhs_cand, lhs_cand))
     {
       // corner case of the form x = t[x], flip sides
@@ -1690,7 +1693,7 @@ void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
     // otherwise, definitely bogus
     return;
   }
-  
+
   Node a = lhs_cand;
   Node b = rhs_cand;
   if (a.getKind() == Kind::APPLY_CONSTRUCTOR
@@ -1737,7 +1740,7 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
   Trace("cconj-gen") << "filterConjecture(" << clem << ")" << std::endl;
 
   Trace("cconjGen") << "(list \"filter\" (quote " << clem << ")";
-  
+
   Trace("cconj-filter") << "Candidate conjecture : " << clem[0]
                         << " == " << clem[1] << "?" << std::endl;
   if (d_conjGenCache.find(clem) != d_conjGenCache.end())
@@ -1754,7 +1757,7 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
   Node b = clem[1];
 
   // if (options().quantifiers.ccgenFilterEval)
-  // {  
+  // {
   //   Trace("cconj-filter") << "Try filter based on evaluation" << std::endl;
   //   if (filterEvalsToFalse(a, b))
   //   {
@@ -1770,12 +1773,22 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
 
   int tested = 0;
 
+  if (d_banned.find(clem) != d_banned.end())
+  {
+    Trace("cconj-filter") << "Filtered based on banlist." << std::endl;
+    return true;
+  }
+
   const bool discard = filterEmatching(a, b, tested);
   Trace("cconj-filter") << "Try filter based on E-matching" << std::endl;
   if (discard)
   {
     Trace("cconj-filter") << "...filtered based on E-matching" << std::endl;
     Trace("cconjGen") << " (list \"e-matching\" #f))" << std::endl;
+
+    // If clem has a counterexample we should never consider it.
+    d_banned.insert(clem);
+
     return true;
   }
   else
@@ -1790,6 +1803,11 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
     Trace("cconj-filter") << "...filtered based on deductively entailed"
                           << std::endl;
     Trace("cconjGen") << " (list \"entailment\" #f))" << std::endl;
+
+    // If clem is deductively entailed now, it will be deductively entailed
+    // later as well.  Let's ban it.
+    d_banned.insert(clem);
+
     return true;
   }
   else
@@ -1832,7 +1850,7 @@ bool ConflictConjectureGenerator::filterConjecture(Node clem)
   // }
 
   Trace("cconjGen") << ")" << std::endl;
-  
+
   // Reject unconditionally for now, since if inductively entailed we
   // assert it immediately.  If we don't reject it here it might get
   // added as a splitting lemma which would be inefficient.
@@ -1922,7 +1940,7 @@ bool ConflictConjectureGenerator::filterEmatching(Node lhs, Node rhs, int& out_t
   // found so far such that (`lhs` * subs) and (`rhs` * subs) are
   // ground.
   size_t tested = 0;
-  
+
   // We will use tested to count the number of substitutions 'subs'
   // found so far such that (`lhs` * subs) and (`rhs` * subs) are
   // ground and are also in the same equivalence class.  It should be
@@ -1965,7 +1983,7 @@ bool ConflictConjectureGenerator::filterEmatching(Node lhs, Node rhs, int& out_t
     // clearly state our two invariants.
     //
     // 1.  `decs.size()` >= `lvl` >= 0.
-    // 
+    //
     // 2.  We work to maintain the invariant that at the beginning of
     // an iteration if `lvl` >= 0 then `decs[lvl]` has *effectively*
     // not contributed to the current substitution.  In other words if
@@ -2027,7 +2045,7 @@ bool ConflictConjectureGenerator::filterEmatching(Node lhs, Node rhs, int& out_t
         // it's not `Node::null()`.  rhs_img_ent --> entailed term for
         // image of RHS.
         const Node rhs_img_ent = ent_chk->getEntailedTerm(rhs_img);
-        
+
         if (!rhs_img_ent.isNull())
         {
           Trace("filterEmatching") << "before call to getRepresentative() in filterEmatching()" << std::endl;
@@ -2136,7 +2154,7 @@ bool ConflictConjectureGenerator::filterEmatching(Node lhs, Node rhs, int& out_t
   Trace("ccgen-filterEmatching") << "Tested " << tested << " substitutions, " << confirmed << " confirmed" << std::endl;
 
   out_tested = tested;
-  
+
   return false;
 }
 
@@ -2206,9 +2224,9 @@ bool ConflictConjectureGenerator::filterEmatchingOld(const Node& a, const Node& 
   }
 
   // We will use tested to count the number of substitutions T found
-  // so far such that a*T and b*T are ground.  
+  // so far such that a*T and b*T are ground.
   size_t tested = 0;
-  
+
   // We will use confirmed to count the number of substitutions T
   // found so far such that a*T and b*T are ground and are also in the
   // same equivalence class.  It should be clear that confirmed <=
@@ -2257,7 +2275,7 @@ bool ConflictConjectureGenerator::filterEmatchingOld(const Node& a, const Node& 
     // decrement eindex by 1 and remove any 'future' jobs from emf by
     // resizing it to the updated value of eindex.
     size_t eindex = 1;
-    
+
     // Our first job is of course to find a term from the equivalence
     // class of representative r that matches the pattern 'a'.
     emf.emplace_back(std::make_shared<EMatchFrame>(tdb, d_ee, a, r));
@@ -2373,7 +2391,7 @@ void ConflictConjectureGenerator::runFunDefEvaluatorExperiment()
   NodeManager* node_mgr = nodeManager();
 
   SkolemManager* sk_mgr = node_mgr->getSkolemManager();
-  
+
   // --First we create a datatype
 
   // ----Create a DType instance
@@ -2395,7 +2413,7 @@ void ConflictConjectureGenerator::runFunDefEvaluatorExperiment()
   my_nat_def.addConstructor(my_zero_def);
 
   my_nat_def.addConstructor(my_succ_def);
-  
+
   // ----Transform the DType instance into a TypeNode
 
   const TypeNode& my_nat = node_mgr->mkDatatypeType(my_nat_def);
@@ -2405,24 +2423,24 @@ void ConflictConjectureGenerator::runFunDefEvaluatorExperiment()
   // ----Create the function type
 
   const TypeNode& my_plus_typ = node_mgr->mkFunctionType({my_nat, my_nat, my_nat});
-  
+
   // ----Make a dummy skolem with the function's type
 
   const Node& my_plus = sk_mgr->mkDummySkolem("my_plus", my_plus_typ);
-  
+
   // --We create a definition for the function
 
   // ----Reset my_nat_def to its resolved version
 
   my_nat_def = my_nat.getDType();
-  
+
   // ----Fetch the constructors, testers and selectors
 
   const Node& my_zero = my_nat_def[0].getConstructor();
   const Node& my_is_zero = my_nat_def[0].getTester();
   const Node& my_succ = my_nat_def[1].getConstructor();
   const Node& my_pred = my_nat_def[1].getSelector(0);
-  
+
   // ----Now construct the entire definition
 
   // x0
@@ -2454,7 +2472,7 @@ void ConflictConjectureGenerator::runFunDefEvaluatorExperiment()
   aexpr = node_mgr->mkNode(Kind::INST_PATTERN_LIST, aexpr);
   FunDefAttribute fda;
   e9.setAttribute(fda, true);
-  
+
   // e10 := my_plus(x0, x1) = ite(my_is_zero(x0),
   //                              x1,
   //                              my_succ(my_plus(my_pred(x0), x1)))
@@ -2464,11 +2482,11 @@ void ConflictConjectureGenerator::runFunDefEvaluatorExperiment()
   const Node& e5 = node_mgr->mkNode(Kind::BOUND_VAR_LIST, x0, x1);
 
   // forall [x0, x1].
-  //   my_plus(x0, x1) = ite(my_is_zero(x0),                   
-  //                         x1,                               
+  //   my_plus(x0, x1) = ite(my_is_zero(x0),
+  //                         x1,
   //                         my_succ(my_plus(my_pred(x0), x1)))
   const Node& my_plus_def = node_mgr->mkNode(Kind::FORALL, e5, e10, aexpr);
-  
+
   // --Clear the FunDefEvaluator
 
   // d_funDefEvaluator.clear();
@@ -2494,7 +2512,7 @@ void ConflictConjectureGenerator::runFunDefEvaluatorExperiment()
   Trace("ccgen-experiment") << raw_term << " --evaluate--> " << evaled_term << std::endl;
 
   // -- Done!
-  
+
   return;
 }
 
@@ -2508,10 +2526,10 @@ void ConflictConjectureGenerator::setUpFunDefEvaluator()
     Trace("setUpFunDefEvaluator") << phi << std::endl;
   }
   Trace("setUpFunDefEvaluator") << ")" << std::endl;
-  
+
   // Organize preserved formulas by head symbol.  Each preserved formula is
   // expected to have the form:
-  // 
+  //
   //     (forall (VARS ...)
   //       (! (=> TEST (= (HEAD VARS ...) BODY))))
   //
@@ -2546,7 +2564,7 @@ void ConflictConjectureGenerator::setUpFunDefEvaluator()
 
   NodeManager* node_mgr = nodeManager();
   SkolemManager* sk_mgr = node_mgr->getSkolemManager();
-  
+
   for (std::map<Node, std::vector<Node>>::iterator entry =
            head_to_rules.begin();
        entry != head_to_rules.end();
@@ -2584,11 +2602,11 @@ void ConflictConjectureGenerator::setUpFunDefEvaluator()
       Subs sigma;
 
       sigma.add(bvs, formals);
-      
+
       // Apply the substitution to the body of the universally quantified
       // formula that is rule.
       const Node& body = sigma.apply(rule[1]);
-      
+
       // Retrieve the test after the substitution.
       const Node& test = body[0];
 
@@ -2610,7 +2628,7 @@ void ConflictConjectureGenerator::setUpFunDefEvaluator()
     std::vector<Node> func_app_children{func_sym};
 
     func_app_children.insert(func_app_children.end(), formals.begin(), formals.end());
-    
+
     Node func_app = node_mgr->mkNode(Kind::APPLY_UF, func_app_children);
 
     Node attr_expr = node_mgr->mkNode(Kind::INST_ATTRIBUTE, func_app);
@@ -2620,7 +2638,7 @@ void ConflictConjectureGenerator::setUpFunDefEvaluator()
     FunDefAttribute fun_def_attr;
 
     func_app.setAttribute(fun_def_attr, true);
-    
+
     // func_sym(formals ...) == state
     const Node& func_rule = node_mgr->mkNode(Kind::EQUAL, func_app, state);
 
@@ -2782,7 +2800,7 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
   }
 
   const TypeNode& rt_typ = nodeManager()->mkTupleType(elt_typs);
-  
+
   //   We then manufacture a dummy skolem of the root type.
 
   Node rt_nt =
@@ -2914,7 +2932,7 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
   //   You'll use add(fvs, ???)
 
   // EntailmentCheck* ent_chk = d_treg.getEntailmentCheck();
-  
+
   for (const Node& rng : rngs)
   {
     Subs sigma;
@@ -2929,12 +2947,12 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
     const Node& lhs_img = sigma.apply(lhs);
 
     // Trace("ccgen-filter-eval") << "!! just about to evaluate " << lhs << " !!" << std::endl;
-    
+
     // reduced lhs
     const Node& lhs_red = d_funDefEvaluator.evaluateDefinitions(lhs_img);
 
     // Trace("ccgen-filter-eval") << "!! just about to retrieve entailed term for " << lhs_red << " !!" << std::endl;
-    
+
     // representative of lhs
     // const Node& lhs_rep = d_ee->getRepresentative(ent_chk->getEntailedTerm(lhs_red));
 
@@ -2943,7 +2961,7 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
     const Node rhs_img = sigma.apply(rhs);
 
     // Trace("ccgen-filter-eval") << "!! just about to evaluate " << rhs << " !!" << std::endl;
-    
+
     const Node& rhs_red = d_funDefEvaluator.evaluateDefinitions(rhs_img);
 
     // Trace("ccgen-filter-eval") << "!! just about to retrieve entailed term for " << rhs_red << " !!" << std::endl;
@@ -2951,9 +2969,9 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
     // const Node& rhs_rep = d_ee->getRepresentative(ent_chk->getEntailedTerm(rhs_red));
 
     // Trace("ccgen-filter-eval") << "!! retrieved !!" << std::endl;
-    
+
     Trace("ccgen-filter-eval") << "checking whether " << lhs_img << " == " << rhs_img << "... ";
-    
+
     if (lhs_red == rhs_red)
     {
       Trace("ccgen-filter-eval") << "entailment check says yes." << std::endl;
@@ -2969,7 +2987,7 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
   // If equality is always entailed we return false and quit.
 
   Trace("ccgen-filter-eval") << "all equal!" << std::endl << std::endl;
-  
+
   return false;
 }
 
@@ -2982,7 +3000,7 @@ bool ConflictConjectureGenerator::filterEvalsToFalse(const Node& lhs,
  * should be turned off after.  On the other hand if we choose to ignore the
  * conjecture we return `true`, as in 'yes, throw away this conjecture', and
  * leave it at that.
- * 
+ *
  * Let's expand all the abbreviated variable names in this function.  conj_body
  * is 'body of conjecture', fvs_set is 'free variables as a set', fvs is 'free
  * variables', bvs is 'bound variables', and conj is 'conjecture'.
@@ -3004,7 +3022,7 @@ bool ConflictConjectureGenerator::filterManual(const Node conj_body, int tested)
     // pb --> 'prompt builder'.
     std::ostringstream pb;
     pb << "Should the following conjecture with score " << tested << " be kept?" << std::endl << lem << std::endl << "[Y/N]: ";
-    
+
     if (!promptForYesOrNo(pb.str()))
     {
       // User said 'no' so discard the conjecture.
@@ -3035,7 +3053,7 @@ bool ConflictConjectureGenerator::filterManual(const Node conj_body, int tested)
       Assert(false);
     }
   }
-  
+
   // Assume conjecture?
   // {
   //   std::ostringstream pb;
@@ -3064,7 +3082,7 @@ bool ConflictConjectureGenerator::filterManual(const Node conj_body, int tested)
 
   // Send lemma with no phase requirement.
   d_qim.addPendingLemma(lem, InferenceId::QUANTIFIERS_CONFLICT_CONJ_GEN_SPLIT);
-  
+
   // Discard the conjecture unconditionally.
   return true;
 }
@@ -3118,7 +3136,7 @@ bool ConflictConjectureGenerator::filterInductivelyEntailed(const Node& conj_bod
   lem = lem.negate();
 
   induction_prover->assertFormula(lem);
-  
+
   Result r = induction_prover->checkSat();
   Trace("filterProvable") << "(induction " << lem << " " << r << ")" << std::endl;
 
@@ -3183,7 +3201,7 @@ void ConflictConjectureGenerator::findCongruenceCandidates()
   std::unordered_set<Node> to_remove;
   std::unordered_set<Node> to_add;
   bool at_fixed_point = false;
-  
+
   while (!at_fixed_point)
   {
     at_fixed_point = true;
@@ -3276,7 +3294,7 @@ void ConflictConjectureGenerator::findCongruenceCandidates()
 
 const Node& Decision::getPat()
 {
-  return d_pat;  
+  return d_pat;
 }
 
 /**
@@ -3335,7 +3353,7 @@ Decision::Decision(TermDb* term_db, eq::EqualityEngine* ee, Node pat, Node rep, 
   d_rec_args = std::vector<size_t>{};
   d_var_args = std::vector<size_t>{};
   std::map<size_t, Node> ground_args{};
-  
+
   // The following loop populates `d_rec_args`, `d_var_args`, and `ground_args`.  
 
   // n_args --> number of arguments
@@ -3391,7 +3409,7 @@ Decision::Decision(TermDb* term_db, eq::EqualityEngine* ee, Node pat, Node rep, 
     const Node& mem = *mem_it;
 
     ++mem_it;
-    
+
     if (!mem.hasOperator() || mem.getOperator() != op || !term_db->isTermActive(mem))
     {
       // No point adding `mem` to `d_cands`.
@@ -3487,7 +3505,7 @@ bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& 
       }
       else
       {
-        // Trace("cconjGen") << " \"out\")" << std::endl;        
+        // Trace("cconjGen") << " \"out\")" << std::endl;
 
         // We will not backtrack yet.  Instead we'll leave it up to the
         // caller, `filterEmatching()`, to call `pop()` after we return
@@ -3517,7 +3535,7 @@ bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& 
   // perform at most n-many additional searches, one for each child
   // that is a non-variable pattern.
   std::vector<Node> reps_rec{};
-  
+
   for (const size_t i : d_rec_args)
   {
     Trace("Decision-push") << "before call to getRepresentative() in push()" << std::endl;
@@ -3534,7 +3552,7 @@ bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& 
 
       return false;
     }
-    
+
     reps_rec.emplace_back(rep);
   }
 
@@ -3558,7 +3576,7 @@ bool Decision::push(TermDb* term_db, eq::EqualityEngine* ee, Subs& subs, Trail& 
 void Decision::pop(Subs& subs)
 {
   // Read description in header file.
-  
+
   for (const size_t i : d_bound)
   {
     subs.erase(d_pat[i]);

@@ -116,6 +116,9 @@ class ConflictConjectureGenerator : public QuantifiersModule
   /** The equality engine of quantifiers. */
   eq::EqualityEngine* d_ee;
 
+  /** The set of all banned conjectures. */
+  std::unordered_set<Node> d_banned;
+
   /**
    * Used for evaluating recusively defined functions on variable-free terms.
    * Helps find counterexamples to candidate conjectures.
