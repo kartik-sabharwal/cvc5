@@ -1448,14 +1448,21 @@ void ConflictConjectureGenerator::findCompatible(
         // argument to be a superset of the equivalence class
         // variables that occur in its second argument.
 
-        if (cur_sub_tgt)
+        //// Temporarily disable this!
+        ////
+        // if (cur_sub_tgt)
+        // {
+        //   candidateConjecture(tgt_exp, exp);
+        // }
+        // else
+        // {
+        //   // `tgt_sub_cur` must be true.
+        //   candidateConjecture(exp, tgt_exp);
+        // }
+
+        if (cur_vars.size() == tgt_vars.size())
         {
           candidateConjecture(tgt_exp, exp);
-        }
-        else
-        {
-          // `tgt_sub_cur` must be true.
-          candidateConjecture(exp, tgt_exp);
         }
       }
     }
@@ -1673,6 +1680,11 @@ void ConflictConjectureGenerator::candidateConjecture(const Node& lhs_cand,
   // entailed in the current model and instead warrants a proof by
   // induction.
   if (lhs_cand == rhs_cand)
+  {
+    return;
+  }
+
+  if (lhs_cand.isVar() || rhs_cand.isVar())
   {
     return;
   }
