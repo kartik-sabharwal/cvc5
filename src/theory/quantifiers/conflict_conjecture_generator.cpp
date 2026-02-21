@@ -1460,9 +1460,17 @@ void ConflictConjectureGenerator::findCompatible(
         //   candidateConjecture(exp, tgt_exp);
         // }
 
-        if (cur_vars.size() == tgt_vars.size())
+        if ((cur_vars.size() <= tgt_vars.size() + 1) &&
+            (tgt_vars.size() <= cur_vars.size() + 1))
         {
-          candidateConjecture(tgt_exp, exp);
+          if (cur_sub_tgt)
+          {
+            candidateConjecture(tgt_exp, exp);
+          }
+          else
+          {
+            candidateConjecture(exp, tgt_exp);
+          }
         }
       }
     }
