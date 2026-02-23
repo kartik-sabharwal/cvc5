@@ -2,8 +2,12 @@
 
 @(require
   latex-utils/scribble/math
-  latex-utils/scribble/utils)
+  latex-utils/scribble/utils
+  (rename-in scribble/base [?- soft-hyphen])
+  (only-in scribble/core make-style make-color-property))
 
+@(define (?-) soft-hyphen)
+@(define concat string-append)
 @(define plus @elem[#:style "operatorname"]{plus})
 @(define S @elem[#:style "operatorname"]{S})
 @(define ite @elem[#:style "operatorname"]{ite})
@@ -20,6 +24,7 @@
 @(define (vec str) @elem[#:style "overline" str])
 @(define (Tuple . xs) (list "\\langle " xs "\\rangle "))
 @(define (equiv str) @elem[#:style "tilde" str])
+@(define (red str) (elem #:style (make-style #f (list (make-color-property "red"))) str))
 
 @title[#:date ""]{Unrolling recursive definitions in cvc5}
 
@@ -176,7 +181,185 @@ The domain of any @m{ω} substitution is always @m{@vec{x}}.
 Any @m{@Combine} job takes a single abstraction as an argument.
 It gets the abstraction from its `parent' @m{@Unroll} job.
 
+@section{Preamble}
 
+The common preamble for all our queries is as follows.
+The value of the @emph{unroll} option is not set in stone.
+It can be increased as necessary.
+
+@verbatim{
+(set-logic ALL)
+
+(set-option :produce-models true)
+(set-option :fmf-fun true)
+(set-option :fmf-fun-rlv true)
+(set-option :unroll 50)
+
+(declare-datatypes ((List 1))
+  ((par (T) ((cons (head T) (tail (List T))) (nil)))))
+
+(define-fun-rec list.length.int ((l (List Int))) Int
+  (ite (= l (as nil (List Int))) 0 (+ 1 (list.length.int (tail l)))))
+
+(define-fun-rec list.get.int ((l (List Int)) (idx Int)) Int
+  (ite (= idx 0) (head l) (list.get.int (tail l) (- idx 1))))
+
+(define-fun-rec list.index.rec.int ((i Int) (l (List Int)) (val Int)) Int
+  (ite (= l (as nil (List Int))) -1 (ite (= (head l) val) i (list.index.rec.int (+ 1 i) (tail l) val))))
+
+(define-fun list.index.int ((l (List Int)) (val Int)) Int
+  (list.index.rec.int 0 l val))
+
+(define-fun-rec list.length.string ((l (List String))) Int
+  (ite (= l (as nil (List String))) 0 (+ 1 (list.length.string (tail l)))))
+
+(define-fun-rec list.get.string ((l (List String)) (idx Int)) String
+  (ite (= idx 0) (head l) (list.get.string (tail l) (- idx 1))))
+
+(define-fun-rec list.sum.int ((l (List Int))) Int
+  (ite (= l (as nil (List Int))) 0 (+ (head l) (list.sum.int (tail l)))))
+
+(define-fun-rec list.append.int ((l1 (List Int)) (l2 (List Int))) (List Int)
+  (ite (= l1 (as nil (List Int))) l2 (cons (head l1) (list.append.int (tail l1) l2))))
+
+(define-fun-rec list.append.string ((l1 (List String)) (l2 (List String))) (List String)
+  (ite (= l1 (as nil (List String))) l2 (cons (head l1) (list.append.string (tail l1) l2))))
+
+(define-fun-rec list.map_add.int ((l (List Int)) (val Int)) (List Int)
+  (ite (= l (as nil (List Int))) (as nil (List Int)) (cons (+ (head l) val) (list.map_add.int (tail l) val))))
+
+(define-fun-rec list.count.int ((l (List Int)) (val Int)) Int
+  (ite (= l (as nil (List Int))) 0 (+ (ite (= (head l) val) 1 0) (list.count.int (tail l) val))))
+
+(define-fun-rec list.count.string ((l (List String)) (val String)) Int
+  (ite (= l (as nil (List String))) 0 (+ (ite (= (head l) val) 1 0) (list.count.string (tail l) val))))
+
+(define-fun-rec list.count.bool ((l (List Bool)) (val Bool)) Int
+  (ite (= l (as nil (List Bool))) 0 (+ (ite (= (head l) val) 1 0) (list.count.bool (tail l) val))))
+
+(define-fun-rec list.count.real ((l (List Real)) (val Real)) Int
+  (ite (= l (as nil (List Real))) 0 (+ (ite (= (head l) val) 1 0) (list.count.real (tail l) val))))
+
+(define-fun list.contains.int ((l (List Int)) (val Int)) Bool
+  (> (list.count.int l val) 0))
+
+(define-fun list.contains.string ((l (List String)) (val String)) Bool
+  (> (list.count.string l val) 0))
+}
+
+@section{Problem List}
+
+Here are the problems from the holey set that cvc5 should be able to solve.
+
+@itemlist[
+@item{Study_4:0.  Done!}
+@item{Study_5:0.  Extra, done!}
+@item{Study_24:0.  Done!}
+@item{LongestMonotonicSubstring:3.  Done!}
+@item{LongestMonotonicSubstring:4.  Done!}
+@item{LongestMonotonicSubstringTricky:2.  Done!}
+@item{FirstNegCumulative:1.  Done!}
+@item{FirstNegCumulative:2.  Done!}
+@item{FirstNegCumulative:4.  Done!}
+@item{FindContainers:0.  Done!}
+@item{FindContainers:1.  Done!}
+@item{FindContainers:2.  Done!}
+@item{FindContainers:3.  Done!}
+@item{FindContainers:4.  Done!}
+@item{RollingMax:1.  Done!}
+@item{RollingMax:2.  Done!}
+@item{FindExtensions:1.  Done!}
+@item{FindExtensions:2.  Done!}
+@item{FindExtensions:3.  Done!}
+@item{FindExtensions:4.  Done!}
+@item{FindPositives:4.  Done!}
+@item{BelowThreshold:0.  Done!}
+@item{BelowThreshold:1.  Done!}
+@item{BelowThreshold:2.  Done!}
+@item{BelowThreshold:3.  Done!}
+@item{BelowThreshold:4.  Done!}
+@item{ConsonantFilter:1.  Done!}
+@item{ConsonantFilter:2.  Done!}
+@item{ConsonantFilter:3.  Done!}
+@item{StrangeSplit:0.  Done!}
+@item{StrangeSplit:1.  Done!}
+@item{StrangeSplit:3.  Done!}
+@item{StrangeSplit:4.  Done!}
+@item{Triple0:0.  Done!}
+@item{Triple0:1.  Done!}
+@item{Triple0:2.  Done!}
+@item{Triple0:3.  Done!}
+@item{Triple0:4.  Done!}
+@item{AnyEdge:0.  Done!}
+@item{AnyEdge:1.  Done!}
+@item{AnyEdge:2.  Done!}
+@item{AnyEdge:3.  Done!}
+@item{AnyEdge:4.  Done!}
+@item{FindProductiveList:1.  Done!}
+@item{FindProductiveList:2.  Done!}
+@item{ListLen:3.  Done!}
+]
+
+@section{Changes}
+
+I would like to make unrolling a preprocessing pass.
+I want it to happen after @emph{match} expressions have been desugared.
+I would like to read the names of the definitions to be unrolled from a file.
+Let's plan these changes.
+
+The function @emph{checkSat} in @emph{solver_engine.cpp} calls the function @emph{checkSatInternal} in the same file.
+The function @emph{checkSatInternal} calls a different function named @emph{checkSat} defined in @emph{smt_driver.cpp}.
+We will disambiguate these function using their namespaces: @emph{SolverEngine::checkSat} and @emph{SmtDriver::checkSat}.
+The function @emph{SmtDriver::checkSat} passes a reference to the assertion pipeline to another function @emph{SmtDriver::getNext@(?-)AssertionsInternal}, which hands the same reference over to @emph{SmtDriverSingleCall::@(?-)getNextAssertions}, and this function finally adds assertions to the assertion pipeline.
+Once the function @emph{SmtDriver::checkSat} calls @emph{getNextAssertionsInternal} to add assertions to the pipeline, it passes a reference to the pipeline to another function @emph{SmtDriverSingleCall::checkSatNext}, which immediately hands the same reference over to @emph{SmtSolver::preprocess} defined in @emph{smt_solver.cpp}.
+The function @emph{SmtSolver::preprocess} subsequently passes the reference to the similarly named @emph{process} defined in @emph{preprocessor.cpp}.
+The preprocessor possesses an instance of the class @emph{ProcessAssertions} and passes the reference to the assertions pipeline to this instance's member function @emph{apply}.
+The funtion @emph{ProcessAssertions::apply} has numerous calls to the function @emph{applyPass}.
+Each call to this @emph{applyPass} function expects two arguments: the first is expected to be a string that identifies the pass within the dictionary @emph{d_passes}, a field of @emph{ProcessAssertions}, and the second is expected to be the reference to the assertions pipeline.
+The dictionary @emph{d_passes} maps each pass identifier to a pointer to an instance of the class @emph{PreprocessingPass}.
+Each instance of the class @emph{PreprocessingPass} or one of its subclasses implements a function @emph{apply} that accepts a reference to the assertions pipeline and returns an instance of the class @emph{PreprocessingPassResult}.
+All subclasses of @emph{PreprocessingPass} are defined in the subdirectory @emph{src/preprocessing/passes}.
+
+@section[#:style 'hidden-number]{New preprocessing pass}
+
+Follow these steps to define a new preprocessing pass named @emph{Unroll}.
+
+@itemlist[
+#:style 'ordered
+@item{
+Create @emph{preprocessing/passes/unroll.h} and @emph{unroll.cpp},
+}
+@item{
+list these freshly created files in the file @emph{CMakeLists.txt},
+}
+@item{
+make a call to the function @emph{registerPassInfo} in the file @emph{preprocessing_pass_registry.cpp} thus mapping the name of your pass to its constructor,
+}
+@item{
+add a switch corresponding to your pass in the appropriate options file, for example @emph{quantifiers_options.toml},
+}
+@item{
+conditionally invoke your pass at the correct point within the body of the function @emph{apply} in the file @emph{process_assertions.cpp}.
+}
+]
+
+@emph{Note}.  If a preprocessing pass' information has been registered, an instance of the pass is created by the function @emph{finishInit} defined in @emph{process_assertions.cpp}.
+
+@section[#:style 'hidden-number]{Sequence}
+
+You want to execute the new preprocessing pass, @emph{Unroll}, when all @emph{match} expressions have been eliminated in favor of @emph{ite} expressions.
+@emph{match} expressions are eliminated in the pass named @emph{ApplySubsts}.
+@emph{ApplySubsts} is currently the first pass in the sequence.
+The pass @emph{Unroll} should be placed after the pass @emph{ApplySubsts}.
+I believe -- but cannot be sure -- that the @emph{Unroll} pass should be placed just before the @emph{QuantifiersPreprocess} pass and its successor, the @emph{FunDefFmf} pass.
+
+@section[#:style 'hidden-number]{Assertion names}
+
+The function @emph{SolverEngine::getUnsatCore} calls @emph{SolverEngine::getUnsatCoreInternal}, which receives a vector of nodes from @emph{UnsatCoreManager::getUnsatCore}, which receives its vector of nodes from @emph{PropEngine::getUnsatCore}, and runs this vector through @emph{UnsatCoreManager::convertPreprocessedToInput}
+
+@section[#:style 'hidden-number]{Assertion pipeline}
+
+@subsection[#:style 'hidden-number]{Study_4}
 
 @section{Miscellaneous advice from Andy}
 

@@ -240,6 +240,11 @@ bool ProcessAssertions::apply(AssertionPipeline& ap)
 
   if (logicInfo().isQuantified())
   {
+    if (options().quantifiers.unroll > 0)
+    {
+      applyPass("unroll", ap);
+    }
+
     // remove rewrite rules, apply pre-skolemization to existential quantifiers
     applyPass("quantifiers-preprocess", ap);
 

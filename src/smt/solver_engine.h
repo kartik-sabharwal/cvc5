@@ -1075,28 +1075,6 @@ class CVC5_EXPORT SolverEngine
                   modes::ProofFormat proofFormat,
                   const std::map<Node, std::string>& assertionNames);
 
-  typedef std::tuple<Node, std::vector<Node>, size_t, std::vector<Node>> AbstractionData;
-
-  /**
-   * Extract the information necessary to unroll the definition of the function symbol func.
-   */
-  AbstractionData makeAbstraction(const Node func, const std::vector<Node> formals, const Node formula);
-
-  /**
-   * Print all the components of a node along with their kinds.
-   */
-  void deconstruct(const Node expr);
-
-  /**
-   * Freshen all the variables bound in the MATCH_BIND_CASE.
-   */
-  Node uniquify(const Node body);
-
-  /**
-   * Actually perform the unrolling.
-   */
-  Node unroll(const Node func, const std::vector<Node> formals, const Node formula, const size_t count);
-
   /* Members -------------------------------------------------------------- */
 
   /** Solver instance that owns this SolverEngine instance. */

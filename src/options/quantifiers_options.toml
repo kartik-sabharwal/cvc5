@@ -685,14 +685,6 @@ name   = "Quantifiers"
 ### Finite model finding options
 
 [[option]]
-  name       = "unroll"
-  category   = "expert"
-  long       = "unroll=N"
-  type       = "int64_t"
-  default    = "0"
-  help       = "number of times to unroll recursive function definitions"
-
-[[option]]
   name       = "finiteModelFind"
   category   = "regular"
   long       = "finite-model-find"
@@ -789,6 +781,14 @@ name   = "Quantifiers"
   type       = "bool"
   default    = "false"
   help       = "send all instantiations for bounded ranges in a single round"
+
+[[option]]
+  name       = "unroll"
+  category   = "expert"
+  long       = "unroll=N"
+  type       = "uint64_t"
+  default    = "0"
+  help       = "number of times to unroll recursive function definitions"
 
 ### Conflict-based instantiation options
 
