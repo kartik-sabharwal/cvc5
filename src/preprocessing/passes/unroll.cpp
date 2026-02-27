@@ -1,109 +1,129 @@
 #include "preprocessing/passes/unroll.h"
 
+#include "expr/node_algorithm.h"
+#include "expr/node_traversal.h"
 #include "expr/subs.h"
+#include "options/quantifiers_options.h"
+#include "preprocessing/assertion_pipeline.h"
 #include "preprocessing/preprocessing_pass_context.h"
 #include "smt/env.h"
-#include "preprocessing/assertion_pipeline.h"
-#include "expr/node_traversal.h"
 #include "theory/quantifiers/quantifiers_attributes.h"
-#include "options/quantifiers_options.h"
 
 namespace cvc5::internal {
 namespace preprocessing {
 namespace passes {
 
-Unroll::Unroll(PreprocessingPassContext* ppc)
-    : PreprocessingPass(ppc, "unroll") 
+Unroll::Unroll(PreprocessingPassContext* ppc) : PreprocessingPass(ppc, "unroll")
 {
-  d_first_time = true;
 }
 
 PreprocessingPassResult Unroll::applyInternal(AssertionPipeline* ap)
 {
-  // Function symbols that do not occur within the scope of a universal or
-  // existential quantifier.
-  std::unordered_set<Node> func_syms;
+  /**
+   * `applyInternal` wants to unroll the definitions of only those function
+   * symbols that satisfy two properties: (1) they are defined recursively and
+   * (2) they occur in assertions that do not have a universal quantifier at the
+   * root.  The function symbols that satisfy property (1) and the indices of
+   * their definitions in the assertion pipeline go in the dictionary `defns`.
+   * The function symbols that satisfy property (2) go in the set `func_syms`.
+   * To reiterate -- we unroll the definitions of only those function symbols
+   * that live in the intersection of `func_syms` with the set of keys of
+   * `defns`.
+   */
 
-  // Function symbols that are associated with a recursive definition mapped to
-  // the assertion index of their definition.
+  // `defns` maps every function symbol satisfying property (1) above to the
+  // index of its definition in the assertion pipeline `ap`.
   std::unordered_map<Node, size_t> defns;
 
-  // Populate both containers in a single sweep over all assertions.
+  // The function symbols that satisfy property (2) above.
+  std::unordered_set<Node> func_syms;
+
+  // Populate both `defns` and `func_syms` in a single sweep over all
+  // assertions.
   for (size_t i = 0; i < ap->size(); ++i)
   {
-    const Node& phi = (*ap)[i];
-    if (phi.getKind() == Kind::FORALL)
+    const Node phi = (*ap)[i];
+    const Node maybe_head = theory::quantifiers::QuantAttributes::getFunDefHead(phi);
+    if (!maybe_head.isNull())
     {
-      TNode body = phi[1];
-      if (body.getKind() == Kind::EQUAL)
-      {
-        TNode lhs = body[0];
-        if (lhs.hasAttribute(theory::FunDefAttribute()))
-        {
-          defns[lhs.getOperator()] = i;
-        }
-      }
+      const Node func = maybe_head.getOperator();
+      defns[func] = i;
     }
-    else
+
+    if (phi.getKind() != Kind::FORALL)
     {
       const std::unordered_set<Node> tmp_syms = getFuncSyms(phi);
       func_syms.insert(tmp_syms.begin(), tmp_syms.end());
     }
   }
 
-  // The map at the intersection of the domain of defns with the set func_syms.
+  Trace("unroll") << "defns := " << defns << std::endl;
+
+  // `rlv` is the restriction of the map `defns` to function symbols that occur
+  // in the set `func_syms`.
   std::unordered_map<Node, size_t> rlv;
   for (const Node& sym : func_syms)
   {
     rlv[sym] = defns[sym];
   }
 
-  Trace("unroll") << "(defined";
-  for (const std::pair<Node, size_t> entry : defns)
+  if (options().quantifiers.unrollFinite)
   {
-    Trace("unroll") << " " << std::get<0>(entry);
-  }
-  Trace("unroll") << ")" << std::endl;
+    // Initialize the substitution.
+    Subs tau;
 
-  Trace("unroll") << "(mentioned";
-  for (const Node& sym : func_syms)
-  {
-    Trace("unroll") << " " << sym;
-  }
-  Trace("unroll") << ")" << std::endl;
+    // Map each function symbol that occurs in `rlv` to a lambda.
+    for (std::pair<Node, size_t> entry : rlv)
+    {
+      const size_t pos = std::get<1>(entry);
+      const Node phi = (*ap)[pos];
+      const Node psi = unroll(phi, options().quantifiers.unroll);
+      const Node head = theory::quantifiers::QuantAttributes::getFunDefHead(psi);
+      const Node body = theory::quantifiers::QuantAttributes::getFunDefBody(psi);
+      const Node func = head.getOperator();
+      std::vector<Node> formals;
+      formals.insert(formals.end(), head.begin(), head.end());
+      const Node lam = nodeManager()->mkNode(Kind::LAMBDA, nodeManager()->mkNode(Kind::BOUND_VAR_LIST, formals), body);
+      tau.add(func, lam);
+    }
 
-  Trace("unroll") << "(relevant";
-  for (const std::pair<Node, size_t> entry : rlv)
-  {
-    Trace("unroll") << " " << std::get<0>(entry);
-  }
-  Trace("unroll") << ")" << std::endl;
+    // Remove all definitions of recursive functions (i.e. replace the assertion
+    // associated with each entry in `defns` with true).
+    for (std::pair<Node, size_t> entry : defns)
+    {
+      const size_t pos = std::get<1>(entry);
+      ap->replace(pos, nodeManager()->mkConst(true));
+    }
 
-  // Now for each assertion index in rlv replace the assertion at that index
-  // with an n-fold unrolling.
-  NodeManager* nm = nodeManager();
-  for (const std::pair<Node, size_t> entry : rlv)
+    // Apply the substitution on each assertion.
+    for (size_t pos = 0; pos < ap->size(); ++pos)
+    {
+      const Node phi = (*ap)[pos];
+      Node psi = tau.apply(phi);
+      if (psi != phi)
+      {
+        ap->replace(pos, psi);
+        // Rewrite to beta-reduce lambdas.
+        ap->ensureRewritten(pos);
+      }
+    }
+  }
+  else
   {
-    const size_t pos = std::get<1>(entry);
-    const Node phi = (*ap)[pos];
-    const Node app = theory::quantifiers::QuantAttributes::getFunDefHead(phi);
-    Trace("SolverEngine::unroll") << "(" << std::endl
-                                  << "(phi " << phi << ")" << std::endl
-                                  << "(app " << app << ")" << std::endl
-                                  << ")" << std::endl;
-    Trace("unroll") << "phi has " << phi.getNumChildren() << " children" << std::endl;
-    const Node func = std::get<0>(entry);
-    std::vector<Node> formals;
-    formals.insert(formals.end(), app.begin(), app.end());
-    const Node body = theory::quantifiers::QuantAttributes::getFunDefBody(phi);
-    const Node new_body = unroll(func, formals, body, options().quantifiers.unroll);
-    const Node psi = nm->mkNode(Kind::FORALL, phi[0], nm->mkNode(Kind::EQUAL, app, new_body), phi[2]);
-    Trace("unroll") << "psi has " << psi.getNumChildren() << " children" << std::endl;
-    Trace("unroll") << "(psi " << psi << ")" << std::endl;
-    ap->replace(pos, psi);
-    Trace("unroll") << "(before-rewriting " << (*ap)[pos][1][0].getAttribute(theory::FunDefAttribute()) << ")" << std::endl;
-    ap->ensureRewritten(pos);
-    Trace("unroll") << "(after-rewriting " << (*ap)[pos][1][0].getAttribute(theory::FunDefAttribute()) << ")" << std::endl;
+    // Each entry in the dictionary `rlv` is a mapping from a function symbol
+    // `func` to an index `pos` such that the assertion at position `pos` in the
+    // assertion pipeline, `phi`, is the definition of `sym`.  We replace `phi`
+    // with `psi` which is the RHS of `phi` unrolled
+    // `options().quantifiers.unroll` many times.
+
+    for (const std::pair<Node, size_t> entry : rlv)
+    {
+      const size_t pos = std::get<1>(entry);
+      const Node phi = (*ap)[pos];
+      const Node psi = unroll(phi, options().quantifiers.unroll);
+      ap->replace(pos, psi);
+      ap->ensureRewritten(pos);
+    }
   }
 
   return PreprocessingPassResult::NO_CONFLICT;
@@ -112,11 +132,10 @@ PreprocessingPassResult Unroll::applyInternal(AssertionPipeline* ap)
 const std::unordered_set<Node> Unroll::getFuncSyms(TNode root) const
 {
   std::unordered_set<Node> result;
-  std::function<bool(TNode)> skipIf = [](TNode n)
-    {
-      const Kind k = n.getKind();
-      return (k == Kind::FORALL || k == Kind::EXISTS);
-    };
+  std::function<bool(TNode)> skipIf = [](TNode n) {
+    const Kind k = n.getKind();
+    return (k == Kind::FORALL || k == Kind::EXISTS);
+  };
   NodeDfsIterable root_iterable(root, VisitOrder::POSTORDER, skipIf);
   NodeDfsIterator root_it = root_iterable.begin();
   NodeDfsIterator root_end = root_iterable.end();
@@ -131,16 +150,9 @@ const std::unordered_set<Node> Unroll::getFuncSyms(TNode root) const
   return result;
 }
 
-Unroll::AbstractionData Unroll::makeAbstraction(
-    const Node func, const std::vector<Node> formals, const Node formula)
+Node Unroll::elimAndOr(const Node expr)
 {
-  const TypeNode func_typ = func.getType().getRangeType();
-
-  size_t n_calls = 0;
-  std::vector<Node> calls;
-  std::vector<Node> abs_vars;
-
-  enum JobKind
+  enum Type
   {
     MAKE,
     BREAK
@@ -148,628 +160,404 @@ Unroll::AbstractionData Unroll::makeAbstraction(
 
   struct Job
   {
-    const JobKind d_job_kind;
+    const Type d_type;
     const Node d_expr;
-    const kind::MetaKind d_metakind;
     const Kind d_kind;
-    const size_t d_num_pop;
+    const size_t d_nargs;
   };
 
   std::vector<Job*> jobs;
+  jobs.push_back(new Job{BREAK, expr, Kind::UNDEFINED_KIND, 0});
+
   std::vector<Node> results;
 
-  jobs.push_back(new Job{
-      BREAK, formula, kind::metakind::INVALID, Kind::UNDEFINED_KIND, 0});
-
-  NodeManager* node_mgr = d_env.getNodeManager();
+  NodeManager* nm = nodeManager();
 
   while (!jobs.empty())
   {
     Job* job = jobs.back();
     jobs.pop_back();
 
-    switch (job->d_job_kind)
+    if (job->d_type == MAKE)
     {
-      case BREAK:
+      std::vector<Node> children;
+      for (size_t i = 0; i < job->d_nargs; ++i)
       {
-        const Node expr = job->d_expr;
-
-        switch (expr.getMetaKind())
-        {
-          case kind::metakind::PARAMETERIZED:
-          {
-            const Kind expr_kind = expr.getKind();
-            const Node expr_op = expr.getOperator();
-
-            if (expr_kind == Kind::APPLY_UF && expr_op == func)
-            {
-              std::ostringstream name;
-              name << "h" << n_calls;
-
-              Node abs_var = node_mgr->mkBoundVar(name.str(), func_typ);
-
-              calls.push_back(expr);
-
-              abs_vars.push_back(abs_var);
-
-              results.push_back(abs_var);
-
-              ++n_calls;
-            }
-            else
-            {
-              const size_t n_children = expr.getNumChildren();
-
-              jobs.push_back(new Job{MAKE,
-                                     Node::null(),
-                                     kind::metakind::PARAMETERIZED,
-                                     expr_kind,
-                                     n_children + 1});
-
-              jobs.push_back(new Job{BREAK,
-                                     expr_op,
-                                     kind::metakind::INVALID,
-                                     Kind::UNDEFINED_KIND,
-                                     0});
-
-              for (size_t i = 0; i < n_children; ++i)
-              {
-                jobs.push_back(new Job{BREAK,
-                                       expr[i],
-                                       kind::metakind::INVALID,
-                                       Kind::UNDEFINED_KIND,
-                                       0});
-              }
-            }
-
-            break;
-          }
-
-          case kind::metakind::OPERATOR:
-          {
-            const size_t n_children = expr.getNumChildren();
-
-            jobs.push_back(new Job{MAKE,
-                                   Node::null(),
-                                   kind::metakind::OPERATOR,
-                                   expr.getKind(),
-                                   n_children});
-
-            for (size_t i = 0; i < n_children; ++i)
-            {
-              jobs.push_back(new Job{BREAK,
-                                     expr[i],
-                                     kind::metakind::INVALID,
-                                     Kind::UNDEFINED_KIND,
-                                     0});
-            }
-
-            break;
-          }
-
-          case kind::metakind::CONSTANT:
-          case kind::metakind::VARIABLE:
-          {
-            results.push_back(expr);
-
-            break;
-          }
-
-          default:
-          {
-            Assert(false);
-            break;
-          }
-        }
-
-        break;
-      }
-
-      case MAKE:
-      {
-        const Kind expr_kind = job->d_kind;
-
-        std::vector<Node> args;
-
-        for (size_t i = 0; i < job->d_num_pop; i++)
-        {
-          args.push_back(results.back());
-          results.pop_back();
-        }
-
-        // Trace("SolverEngine::makeAbstraction") << "(" << expr_kind;
-        // for (size_t i = 0; i < job->d_num_pop; i++)
-        // {
-        //   Trace("SolverEngine::makeAbstraction") << " " << args[i];
-        // }
-        // Trace("SolverEngine::makeAbstraction") << ")" << std::endl;
-
-        const Node result = node_mgr->mkNode(expr_kind, args);
-
-        results.push_back(result);
-
-        break;
-      }
-
-      default:
-      {
-        Assert(false);
-        break;
-      }
-    }
-
-    delete job;
-  }
-
-  const Node result = results.back();
-  results.pop_back();
-
-  if (TraceIsOn("SolverEngine::makeAbstraction"))
-  {
-    std::ostringstream msg;
-
-    msg << "(";
-    msg << "(abstraction " << result << ")";
-    msg << " (calls";
-    for (size_t i = 0; i < n_calls; ++i)
-    {
-      msg << " (";
-      msg << i << " . " << calls[i];
-      msg << ")";
-    }
-    msg << ")";
-    msg << " (variables";
-    for (size_t i = 0; i < n_calls; ++i)
-    {
-      msg << " (";
-      msg << i << " . " << abs_vars[i];
-      msg << ")";
-    }
-    msg << ")";
-    msg << ")" << std::endl;
-
-    Trace("SolverEngine::makeAbstraction") << msg.str();
-  }
-
-  return Unroll::AbstractionData{result, abs_vars, n_calls, calls};
-}
-
-Node Unroll::uniquify(const Node body)
-{
-  enum JobKind
-  {
-    BREAK,
-    MAKE,
-    FRESHEN
-  };
-
-  struct Job
-  {
-    const JobKind d_job_kind;  // ALL
-    const Node d_node;         // BREAK, FRESHEN
-    const Kind d_kind;         // MAKE
-    const size_t d_num_args;   // MAKE
-    const Node d_pat;          // FRESHEN
-
-    static Job mkBreak(const Node node)
-    {
-      return Job{BREAK, node, Kind::UNDEFINED_KIND, 0, Node::null()};
-    }
-
-    static Job mkMake(const Kind kind, const size_t num_args)
-    {
-      return Job{MAKE, Node::null(), kind, num_args, Node::null()};
-    }
-
-    static Job mkFreshen(const Node bvs, const Node pat)
-    {
-      return Job{FRESHEN, bvs, Kind::UNDEFINED_KIND, 0, pat};
-    }
-
-    std::string toString()
-    {
-      // msg is short for message.
-      std::ostringstream msg;
-
-      switch (d_job_kind)
-      {
-        case BREAK:
-        {
-          msg << "(Break " << d_node << ")";
-          break;
-        }
-        case MAKE:
-        {
-          msg << "(Make " << d_kind << " " << d_num_args << ")";
-          break;
-        }
-        case FRESHEN:
-        {
-          msg << "(Freshen " << d_node << " " << d_pat << ")";
-          break;
-        }
-      }
-
-      return msg.str();
-    }
-  };
-
-  std::vector<Job> jobs = {Job::mkBreak(body)};
-  std::vector<Node> results;
-  NodeManager* node_mgr = d_env.getNodeManager();
-
-  while (!jobs.empty())
-  {
-    Job job = jobs.back();
-    jobs.pop_back();
-
-    const JobKind jk = job.d_job_kind;
-
-    switch (jk)
-    {
-      case BREAK:
-      {
-        const Node node = job.d_node;
-
-        // nmk is 'metakind of node'.
-        const kind::MetaKind nmk = node.getMetaKind();
-
-        // nk is 'kind of node'
-        const Kind nk = node.getKind();
-
-        switch (nmk)
-        {
-          case kind::metakind::CONSTANT:
-          case kind::metakind::VARIABLE:
-          {
-            results.push_back(node);
-            break;
-          }
-
-          case kind::metakind::PARAMETERIZED:
-          {
-            jobs.push_back(Job::mkMake(nk, node.getNumChildren() + 1));
-
-            jobs.push_back(Job::mkBreak(node.getOperator()));
-
-            for (Node::iterator ch = node.begin(); ch != node.end(); ++ch)
-            {
-              jobs.push_back(Job::mkBreak(*ch));
-            }
-
-            break;
-          }
-
-          case kind::metakind::OPERATOR:
-          {
-            switch (nk)
-            {
-              case Kind::MATCH_BIND_CASE:
-              {
-                jobs.push_back(Job::mkFreshen(node[0], node[1]));
-
-                jobs.push_back(Job::mkBreak(node[2]));
-
-                break;
-              }
-
-              default:
-              {
-                jobs.push_back(Job::mkMake(nk, node.getNumChildren()));
-
-                for (Node::iterator ch = node.begin(); ch != node.end(); ++ch)
-                {
-                  jobs.push_back(Job::mkBreak(*ch));
-                }
-
-                break;
-              }
-            }
-            break;
-          }
-
-default:
-{
-  break;
-}
-
-        }
-      break;
-      }
-
-      case MAKE:
-      {
-        const Kind kind = job.d_kind;
-        const size_t num_args = job.d_num_args;
-
-        std::vector<Node> args;
-        for (size_t i = 0; i < num_args; i++)
-        {
-          args.push_back(results.back());
-          results.pop_back();
-        }
-
-        const Node node = node_mgr->mkNode(kind, args);
-
-        results.push_back(node);
-
-        break;
-      }
-
-      case FRESHEN:
-      {
-        // Grab the bound variables.
-        const Node bvs = job.d_node;
-
-        // Grab the pattern.
-        const Node pat = job.d_pat;
-
-        // Grab the body.
-        const Node case_body = results.back();
+        children.push_back(results.back());
         results.pop_back();
-
-        // Construct the substitution.
-        Subs sigma;
-        for (Node::iterator bv_ref = bvs.begin(); bv_ref != bvs.end(); ++bv_ref)
-        {
-          const Node bv = *bv_ref;
-
-          sigma.add(bv, node_mgr->mkBoundVar(bv.getType()));
-        }
-
-        // Apply the substitution to the bound variable list.
-        const Node new_bvs = sigma.apply(bvs);
-
-        // Apply the substitution to the pattern.
-        const Node new_pat = sigma.apply(pat);
-
-        // Apply the substitution to the body.
-        const Node new_case_body = sigma.apply(case_body);
-
-        // Construct a Node with kind MATCH_BIND_CASE.
-        const Node node = node_mgr->mkNode(
-            Kind::MATCH_BIND_CASE,
-            std::vector<Node>{new_bvs, new_pat, new_case_body});
-
-        // Push it on to the result stack.
-        results.push_back(node);
-
-        break;
       }
+
+      results.push_back(nm->mkNode(job->d_kind, children));
     }
-  }
-
-  const Node result = results.back();
-  results.clear();
-
-  Trace("SolverEngine::uniquify")
-      << "(uniquify " << body << " " << result << ")" << std::endl;
-
-  return result;
-}
-
-void Unroll::deconstruct(const Node body)
-{
-  // At this moment our only purpose is to better understand 'body'.
-  // We're going to traverse it in a depth-first left-to-right fashion and print
-  // all the nodes as we go along.
-
-  typedef Node Job;
-
-  std::vector<Job> jobs = {body};
-
-  while (!jobs.empty())
-  {
-    Job job = jobs.back();
-    jobs.pop_back();
-
-    switch (job.getMetaKind())
+    else
     {
-      case kind::metakind::OPERATOR:
-      {
-        Trace("SolverEngine::uniquify") << job.getKind() << std::endl;
+      const Node job_expr = job->d_expr;
+      const kind::MetaKind job_expr_metakind = job_expr.getMetaKind();
+      const Kind job_expr_kind = job_expr.getKind();
 
-        for (Node::const_reverse_iterator ch = job.rbegin(); ch != job.rend();
-             ++ch)
+      if (job_expr_metakind == kind::metakind::CONSTANT
+          || job_expr_metakind == kind::metakind::VARIABLE)
+      {
+        results.push_back(job_expr);
+      }
+      else if (job_expr_metakind == kind::metakind::OPERATOR)
+      {
+        if (job_expr_kind == Kind::AND)
         {
-          jobs.push_back(*ch);
-        }
+          const size_t nchildren = job_expr.getNumChildren();
 
-        break;
-      }
-      case kind::metakind::PARAMETERIZED:
-      {
-        Trace("SolverEngine::uniquify") << job.getKind() << std::endl;
-
-        for (Node::const_reverse_iterator ch = job.rbegin(); ch != job.rend();
-             ++ch)
-        {
-          jobs.push_back(*ch);
-        }
-
-        jobs.push_back(job.getOperator());
-
-        break;
-      }
-      case kind::metakind::CONSTANT:
-      case kind::metakind::VARIABLE:
-      {
-        Trace("SolverEngine::uniquify") << job << std::endl;
-
-        break;
-      }
-      default:
-      {
-        Assert(false);
-      }
-    }
-  }
-}
-
-Node Unroll::unroll(const Node func,
-                          const std::vector<Node> formals,
-                          const Node formula,
-                          const size_t count)
-{
-  AbstractionData abs_dat = makeAbstraction(func, formals, formula);
-
-  const Node body = std::get<0>(abs_dat);
-  const std::vector<Node> vars = std::get<1>(abs_dat);
-  const size_t n_calls = std::get<2>(abs_dat);
-  const std::vector<Node> calls = std::get<3>(abs_dat);
-
-  Assert(vars.size() == calls.size() && calls.size() == n_calls);
-
-  std::vector<Subs> xforms;
-  for (const Node& a_call : calls)
-  {
-    Subs xform;
-
-    Trace("SolverEngine::unroll") << "a_call == " << a_call << " and formals == " << formals << std::endl;
-    Assert(a_call.getNumChildren() == formals.size());
-
-    for (size_t i = 0; i < a_call.getNumChildren(); ++i)
-    {
-      xform.add(formals[i], a_call[i]);
-    }
-
-    xforms.push_back(xform);
-  }
-
-  enum JobKind
-  {
-    UNROLL,
-    COMBINE
-  };
-
-  struct Job
-  {
-    const JobKind d_job_kind;
-    const size_t d_count;
-    Subs d_xform;
-  };
-
-  std::vector<Job*> jobs;
-  std::vector<Node> results;
-
-  Subs id;
-  for (const Node& x : formals)
-  {
-    id.add(x, x);
-  }
-
-  jobs.push_back(new Job{UNROLL, count, id});
-
-  NodeManager* node_mgr = d_env.getNodeManager();
-
-  while (!jobs.empty())
-  {
-    if (TraceIsOn("SolverEngine::unroll"))
-    {
-      std::ostringstream msg;
-
-      msg << "(jobs";
-      for (const Job* job : jobs)
-      {
-        msg << " (job " << (job->d_job_kind == UNROLL ? "UNROLL" : "COMBINE")
-            << " " << job->d_count << " " << (job->d_xform).toString() << ")";
-      }
-      msg << ")" << std::endl;
-
-      msg << "(results";
-      for (const Node& res : results)
-      {
-        msg << " " << res;
-      }
-      msg << ")" << std::endl;
-
-      Trace("SolverEngine::unroll") << msg.str();
-    }
-
-    Job* job = jobs.back();
-    jobs.pop_back();
-
-    switch (job->d_job_kind)
-    {
-      case UNROLL:
-      {
-        // cnt --> count, so as not to shadow the argument of the same name.
-        const size_t cnt = job->d_count;
-        const Subs& job_xform = job->d_xform;
-
-        if (cnt == 0)
-        {
-          std::vector<Node> args;
-          args.push_back(func);
-          for (const Node& x : formals)
+          for (size_t i = 0; i < nchildren - 1; ++i)
           {
-            args.push_back(job_xform.apply(x));
+            jobs.push_back(new Job{MAKE, Node::null(), Kind::ITE, 3});
+            jobs.push_back(
+                new Job{BREAK, job_expr[i], Kind::UNDEFINED_KIND, 0});
           }
 
-          const Node result = node_mgr->mkNode(Kind::APPLY_UF, args);
+          jobs.push_back(
+              new Job{BREAK, job_expr[nchildren - 1], Kind::UNDEFINED_KIND, 0});
 
-          results.push_back(result);
+          for (size_t i = 0; i < nchildren - 1; ++i)
+          {
+            jobs.push_back(
+                new Job{BREAK, nm->mkConst(false), Kind::UNDEFINED_KIND, 0});
+          }
+        }
+        else if (job_expr_kind == Kind::OR)
+        {
+          const size_t nchildren = job_expr.getNumChildren();
+
+          for (size_t i = 0; i < nchildren - 1; ++i)
+          {
+            jobs.push_back(new Job{MAKE, Node::null(), Kind::ITE, 3});
+            jobs.push_back(
+                new Job{BREAK, job_expr[i], Kind::UNDEFINED_KIND, 0});
+            jobs.push_back(
+                new Job{BREAK, nm->mkConst(true), Kind::UNDEFINED_KIND, 0});
+          }
+
+          jobs.push_back(
+              new Job{BREAK, job_expr[nchildren - 1], Kind::UNDEFINED_KIND, 0});
         }
         else
         {
-          jobs.push_back(new Job{COMBINE, 0, job_xform});
+          jobs.push_back(new Job{
+              MAKE, Node::null(), job_expr_kind, job_expr.getNumChildren()});
 
-          for (size_t i = 0; i < n_calls; ++i)
+          for (const Node ch : job_expr)
           {
-            Subs next_xform;
-            next_xform.append(xforms[i]);
-            job_xform.applyToRange(next_xform);
-
-            jobs.push_back(new Job{UNROLL, cnt - 1, next_xform});
+            jobs.push_back(new Job{BREAK, ch, Kind::UNDEFINED_KIND, 0});
           }
         }
-
-        break;
       }
-
-      case COMBINE:
+      else if (job_expr_metakind == kind::metakind::PARAMETERIZED)
       {
-        Subs& job_xform = job->d_xform;
+        jobs.push_back(new Job{
+            MAKE, Node::null(), job_expr_kind, job_expr.getNumChildren() + 1});
+        jobs.push_back(
+            new Job{BREAK, job_expr.getOperator(), Kind::UNDEFINED_KIND, 0});
 
-        Subs concretes;
-        for (size_t i = 0; i < n_calls; ++i)
+        for (const Node ch : job_expr)
         {
-          const Node concrete = results.back();
-          results.pop_back();
-
-          concretes.add(vars[i], concrete);
+          jobs.push_back(new Job{BREAK, ch, Kind::UNDEFINED_KIND, 0});
         }
-        concretes.append(job_xform);
-
-        const Node result = concretes.apply(body);
-
-        Trace("SolverEngine::unroll") << "(combine " << concretes << " " << body
-                                      << " " << result << ")" << std::endl;
-
-        results.push_back(result);
-
-        break;
       }
-
-      default:
+      else
       {
-        Assert(false);
-        break;
+        results.push_back(job_expr);
       }
     }
 
     delete job;
   }
 
-  const Node result = results.back();
-  results.clear();
-
-  Trace("SolverEngine::unroll") << "(unroll " << result << ")" << std::endl;
-
-  return result;
+  return results.back();
 }
 
-} // namespace passes
-} // namespace preprocessing
-} // namespace cvc5::internal
+Node Unroll::unroll(const Node phi, size_t fuel)
+{
+  // We fetch the name of the function symbol, `func`, whose definition we want
+  // to unroll.
+  const Node head = theory::quantifiers::QuantAttributes::getFunDefHead(phi);
+  const Node func = head.getOperator();
 
+  // Get the body of the definition of the function symbol `func`.
+  const Node body = theory::quantifiers::QuantAttributes::getFunDefBody(phi);
+
+  // For now we call elimAndOr here.
+  const Node body_ite = elimAndOr(body);
+  const Node base_case = baseCase(func, body_ite);
+
+  // We maintain a node to hold the current unrolling of the body of `func`.
+  // For each iteration of the loop below we collect the set of calls to `func`
+  // in `unrolled_body`.  From this set we remove the calls to `func` that are
+  // proper subterms of other calls to `func`.  Let's call this the set of
+  // top-level calls.  We iterate through the list of top-level calls and spend
+  // a unit of fuel to unroll each call exactly once.  In case we run out of
+  // fuel we unroll the call to itself.
+  Node unrolled_body = body;
+  while (fuel > 0)
+  {
+    // We collect all calls to uninterpreted functions in `unrolled_body` in
+    // `uf_calls`.
+    std::unordered_set<Node> uf_calls;
+    expr::getSubtermsKind(Kind::APPLY_UF, unrolled_body, uf_calls);
+
+    // We collect all calls to `func` in `unrolled_body` in `func_calls`.
+    std::unordered_set<Node> func_calls;
+    for (const Node& call : uf_calls)
+    {
+      if (call.getOperator() == func)
+      {
+        func_calls.insert(call);
+      }
+    }
+
+    // These are calls to uninterpreted functions that are proper subterms of
+    // the calls to `func` in `unrolled_body`.
+    std::unordered_set<Node> nested_calls;
+    for (const Node& call : func_calls)
+    {
+      expr::getSubtermsKind(Kind::APPLY_UF, call, nested_calls);
+      nested_calls.erase(call);
+    }
+
+    // These are the top-level calls to `func` in `unrolled_body`.  In other
+    // words these are the calls to `func` in `unrolled_body` that do not occur
+    // within other calls to `func`.
+    std::vector<Node> top_level_calls;
+    for (const Node& call : func_calls)
+    {
+      if (nested_calls.find(call) == nested_calls.end())
+      {
+        top_level_calls.push_back(call);
+      }
+    }
+
+    // We construct a substitution `tau` that maps each `call` in
+    // `top_level_calls` to its one-step unrolling if there was fuel to spend in
+    // the loop, or itself if there was no fuel to spend in the loop.  For each
+    // `call` if there is fuel to spend we construct a substitution `sigma` that
+    // maps the formal parameters -- the children of `head` -- to the actual
+    // parameters -- the children of `call`.  In `tau` we map `call` to the
+    // result of applying the substitution `sigma` to `body`.
+    Subs tau;
+    for (const Node& call : top_level_calls)
+    {
+      if (fuel > 0)
+      {
+        Subs sigma;
+        for (size_t ch = 0; ch < call.getNumChildren(); ++ch)
+        {
+          sigma.add(head[ch], call[ch]);
+        }
+
+        tau.add(call, sigma.apply(body));
+
+        --fuel;
+      }
+      else
+      {
+        break;
+      }
+    }
+
+    // We update `unrolled_body` by applying `tau` to it.
+    unrolled_body = tau.apply(unrolled_body);
+  }
+
+  if (options().quantifiers.unrollFinite)
+  {
+    // We want to remove all calls to `func` in `unrolled_body`.  We first
+    // collect all calls to uninterpreted functions in `unrolled_body` in
+    // `uf_calls`.  We filter `uf_calls` to keep only calls of `func` naming the
+    // result `func_calls`.  We make `func_calls` a vector because we will care
+    // about the order of its elements.  Some elements of `func_calls` may be
+    // proper subexpressions of other elements of `func_calls`.  To handle this
+    // we sort `func_calls` so that proper subterms occur before their parents.
+    // We also initialize a substitution `tau`.  We run the loop while
+    // `func_calls` is non-empty.  We take the first element of `func_calls`.
+    // We map it to its base case unrolling in the substitution `tau`.  We dump
+    // the contents of `func_calls` in a temporary vector `tmp`, emptying the
+    // former.  We then dump the contents of `tmp` back into `func_calls` but
+    // after taking their images under `tau`.
+
+    std::unordered_set<Node> uf_calls;
+    expr::getSubtermsKind(Kind::APPLY_UF, unrolled_body, uf_calls);
+
+    std::vector<Node> func_calls;
+    func_calls.insert(func_calls.end(), uf_calls.begin(), uf_calls.end());
+
+    std::sort(func_calls.begin(), func_calls.end());
+
+    Subs tau;
+
+    while (!func_calls.empty())
+    {
+      Node call0 = func_calls[0];
+
+      Subs sigma;
+      for (size_t ch = 0; ch < call0.getNumChildren(); ++ch)
+      {
+        sigma.add(head[ch], call0[ch]);
+      }
+
+      Node expansion0 = sigma.apply(base_case);
+
+      tau.add(call0, expansion0);
+
+      const size_t n = func_calls.size() - 1;
+      std::vector<Node> tmp;
+      for (size_t i = 0; i < n; ++i)
+      {
+        tmp.push_back(func_calls.back());
+        func_calls.pop_back();
+      }
+      func_calls.pop_back();
+
+      for (size_t i = 0; i < n; ++i)
+      {
+        func_calls.push_back(tau.apply(tmp.back()));
+        tmp.pop_back();
+      }
+    }
+
+    unrolled_body = tau.apply(unrolled_body);
+  }
+
+  NodeManager* nm = nodeManager();
+  const Node psi = nm->mkNode(Kind::FORALL,
+                              phi[0],
+                              nm->mkNode(Kind::EQUAL, head, unrolled_body),
+                              phi[2]);
+
+  return psi;
+}
+
+Node Unroll::baseCase(const Node func, const Node expr)
+{
+  enum JobType
+  {
+    BREAK,
+    MAKE
+  };
+
+  enum ResultType
+  {
+    NODE,
+    FAIL
+  };
+
+  struct Job
+  {
+    const JobType d_type;
+    const Node d_expr;
+  };
+
+  struct Result
+  {
+    const ResultType d_type;
+    const Node d_expr;
+  };
+
+  std::vector<Job*> jobs;
+  jobs.push_back(new Job{BREAK, expr});
+
+  std::vector<Result> results;
+
+  NodeManager* nm = nodeManager();
+
+  while (!jobs.empty())
+  {
+    Job* job = jobs.back();
+    jobs.pop_back();
+
+    if (job->d_type == MAKE)
+    {
+      Result test_result = results.back();
+      Node test = test_result.d_expr;
+      results.pop_back();
+
+      Result conseq_result = results.back();
+      Node conseq = conseq_result.d_expr;
+      results.pop_back();
+
+      Result alt_result = results.back();
+      Node alt = alt_result.d_expr;
+      results.pop_back();
+
+      if (test_result.d_type == FAIL)
+      {
+        results.push_back(Result{FAIL, Node::null()});
+      }
+      else if (conseq_result.d_type == FAIL && alt_result.d_type == NODE)
+      {
+        results.push_back(Result{NODE, alt});
+      }
+      else if (alt_result.d_type == FAIL && conseq_result.d_type == NODE)
+      {
+        results.push_back(Result{NODE, conseq});
+      }
+      else if (alt_result.d_type == NODE && conseq_result.d_type == NODE)
+      {
+        results.push_back(
+            Result{NODE, nm->mkNode(Kind::ITE, test, conseq, alt)});
+      }
+      else
+      {
+        results.push_back(Result{FAIL, Node::null()});
+      }
+    }
+    else
+    {
+      Node job_expr = job->d_expr;
+      Kind job_expr_kind = job_expr.getKind();
+
+      if (job_expr_kind == Kind::ITE)
+      {
+        jobs.push_back(new Job{MAKE, Node::null()});
+        jobs.push_back(new Job{BREAK, job_expr[0]});
+        jobs.push_back(new Job{BREAK, job_expr[1]});
+        jobs.push_back(new Job{BREAK, job_expr[2]});
+      }
+      else
+      {
+        std::unordered_set<Node> uf_calls;
+        expr::getSubtermsKind(Kind::APPLY_UF, job_expr, uf_calls);
+
+        bool has_func_call = false;
+        for (const Node& call : uf_calls)
+        {
+          if (call.getOperator() == func)
+          {
+            has_func_call = true;
+          }
+        }
+
+        if (has_func_call)
+        {
+          results.push_back(Result{FAIL, Node::null()});
+        }
+        else
+        {
+          results.push_back(Result{NODE, job_expr});
+        }
+      }
+    }
+
+    delete job;
+  }
+
+  Result result = results.back();
+
+  Node result_node;
+  if (result.d_type == NODE)
+  {
+    result_node = result.d_expr;
+  }
+
+  return result_node;
+}
+
+}  // namespace passes
+}  // namespace preprocessing
+}  // namespace cvc5::internal

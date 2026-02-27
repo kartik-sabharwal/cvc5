@@ -790,6 +790,14 @@ name   = "Quantifiers"
   default    = "0"
   help       = "number of times to unroll recursive function definitions"
 
+[[option]]
+  name       = "unrollFinite"
+  category   = "expert"
+  long       = "unroll-finite"
+  type       = "bool"
+  default    = "false"
+  help       = "force a base case in the last unrolling"
+
 ### Conflict-based instantiation options
 
 [[option]]
