@@ -35,29 +35,101 @@ PreprocessingPassResult Unroll::applyInternal(AssertionPipeline* ap)
   // index of its definition in the assertion pipeline `ap`.
   std::unordered_map<Node, size_t> defns;
 
-  // The function symbols that satisfy property (2) above.
-  std::unordered_set<Node> func_syms;
-
-  // Populate both `defns` and `func_syms` in a single sweep over all
-  // assertions.
+  // Populate `defns`.
   for (size_t i = 0; i < ap->size(); ++i)
   {
     const Node phi = (*ap)[i];
-    const Node maybe_head = theory::quantifiers::QuantAttributes::getFunDefHead(phi);
+    const Node maybe_head =
+        theory::quantifiers::QuantAttributes::getFunDefHead(phi);
     if (!maybe_head.isNull())
     {
       const Node func = maybe_head.getOperator();
       defns[func] = i;
     }
+  }
 
-    if (phi.getKind() != Kind::FORALL)
+  // Populate `func_syms` now.  We will build this using a depth-first search.
+  // We will initialize our `itinerary` (a vector) with the set of uninterpreted
+  // function symbols that appear in quantifier-free assertions.  `func_syms` is
+  // our set of visited function symbols.  We pop a function symbol `func` from
+  // the itinerary.  Immediately add it to `func_syms`.  After that check
+  // whether `func` is a key in `defns`.  If it does, in other words if `func`
+  // is defined, we look at the uninterpreted functions that occur in its
+  // definition.  Each featured function symbol should be pushed on to
+  // `itinerary` as long as it is not present in `func_syms`.
+
+  // The stack of nodes we would like to visit.
+  std::vector<Node> itinerary;
+
+  // Loop over assertions.
+  for (size_t i = 0; i < ap->size(); ++i)
+  {
+    const Node phi = (*ap)[i];
+
+    // If `phi` does not have universally or existentially quantified
+    // subterms.
+    if (!expr::hasSubtermKinds({Kind::FORALL, Kind::EXISTS}, phi))
     {
-      const std::unordered_set<Node> tmp_syms = getFuncSyms(phi);
-      func_syms.insert(tmp_syms.begin(), tmp_syms.end());
+      // `tmp` will store all subterms of `phi` that are applications of
+      // uninterpreted functions.
+      std::unordered_set<Node> tmp;
+      expr::getSubtermsKind(Kind::APPLY_UF, phi, tmp);
+
+      // We push the operator of each application in `tmp` to `itinerary`.
+      for (const Node& app : tmp)
+      {
+        itinerary.push_back(app.getOperator());
+      }
     }
   }
 
-  Trace("unroll") << "defns := " << defns << std::endl;
+  // The set of function symbols we've visited.
+  std::unordered_set<Node> func_syms;
+
+  while (!itinerary.empty())
+  {
+    // Pop a function symbol from the itinerary.
+    const Node func = itinerary.back();
+    itinerary.pop_back();
+
+    // If `func` already in `func_syms` we continue to the next iteration.
+    if (func_syms.find(func) != func_syms.end())
+    {
+      continue;
+    }
+    else
+    {
+      // Add it to `func_syms`.
+      func_syms.insert(func);
+
+      // Is `func` associated with a definition?
+      if (defns.find(func) != defns.end())
+      {
+        // `phi` is the definition of `func`.
+        const size_t pos = defns[func];
+        const Node phi = (*ap)[pos];
+
+        // `tmp` is the set of subterms of `phi` that are applications of
+        // uninterpreted functions.
+        std::unordered_set<Node> tmp;
+        expr::getSubtermsKind(Kind::APPLY_UF, phi, tmp);
+
+        // For each application in `tmp` if its operator is not yet in
+        // `func_syms` we push the operator on to `itinerary`.
+        for (const Node& app : tmp)
+        {
+          const Node func2 = app.getOperator();
+
+          if (func_syms.find(func2) == func_syms.end())
+          {
+            itinerary.push_back(func2);
+          }
+        }
+      }
+    }
+  }
+
+  Trace("unroll") << "func_syms := " << func_syms << std::endl;
 
   // `rlv` is the restriction of the map `defns` to function symbols that occur
   // in the set `func_syms`.
@@ -78,13 +150,21 @@ PreprocessingPassResult Unroll::applyInternal(AssertionPipeline* ap)
       const size_t pos = std::get<1>(entry);
       const Node phi = (*ap)[pos];
       const Node psi = unroll(phi, options().quantifiers.unroll);
-      const Node head = theory::quantifiers::QuantAttributes::getFunDefHead(psi);
-      const Node body = theory::quantifiers::QuantAttributes::getFunDefBody(psi);
+      const Node head =
+          theory::quantifiers::QuantAttributes::getFunDefHead(psi);
+      const Node body =
+          theory::quantifiers::QuantAttributes::getFunDefBody(psi);
       const Node func = head.getOperator();
       std::vector<Node> formals;
       formals.insert(formals.end(), head.begin(), head.end());
-      const Node lam = nodeManager()->mkNode(Kind::LAMBDA, nodeManager()->mkNode(Kind::BOUND_VAR_LIST, formals), body);
+      const Node lam = nodeManager()->mkNode(
+          Kind::LAMBDA,
+          nodeManager()->mkNode(Kind::BOUND_VAR_LIST, formals),
+          body);
+
+      Trace("unroll") << "[applyInternal] Mapping " << func << " to " << lam << "... ";
       tau.add(func, lam);
+      Trace("unroll") << "mapped." << std::endl;
     }
 
     // Remove all definitions of recursive functions (i.e. replace the assertion
@@ -348,10 +428,14 @@ Node Unroll::unroll(const Node phi, size_t fuel)
         Subs sigma;
         for (size_t ch = 0; ch < call.getNumChildren(); ++ch)
         {
+          Trace("unroll") << "[unroll, general, sigma] Mapping " << head[ch] << " to " << call[ch] << "... ";
           sigma.add(head[ch], call[ch]);
+          Trace("unroll") << "mapped." << std::endl;
         }
 
+        Trace("unroll") << "[unroll, general, tau] Mapping " << call << " to " << sigma.apply(body) << "... ";
         tau.add(call, sigma.apply(body));
+        Trace("unroll") << "mapped." << std::endl;
 
         --fuel;
       }
@@ -385,7 +469,13 @@ Node Unroll::unroll(const Node phi, size_t fuel)
     expr::getSubtermsKind(Kind::APPLY_UF, unrolled_body, uf_calls);
 
     std::vector<Node> func_calls;
-    func_calls.insert(func_calls.end(), uf_calls.begin(), uf_calls.end());
+    for (const Node& call : uf_calls)
+    {
+      if (call.getOperator() == func)
+      {
+        func_calls.push_back(call);
+      }
+    }
 
     std::sort(func_calls.begin(), func_calls.end());
 
@@ -398,12 +488,16 @@ Node Unroll::unroll(const Node phi, size_t fuel)
       Subs sigma;
       for (size_t ch = 0; ch < call0.getNumChildren(); ++ch)
       {
+        Trace("unroll") << "[unroll, finite, sigma] Mapping " << head[ch] << " to " << call0[ch] << "... ";
         sigma.add(head[ch], call0[ch]);
+        Trace("unroll") << "mapped." << std::endl;
       }
 
       Node expansion0 = sigma.apply(base_case);
 
+      Trace("unroll") << "[unroll, finite, tau] Mapping " << call0 << " to " << expansion0 << "... ";
       tau.add(call0, expansion0);
+      Trace("unroll") << "mapped." << std::endl;
 
       const size_t n = func_calls.size() - 1;
       std::vector<Node> tmp;
