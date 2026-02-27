@@ -34,6 +34,7 @@ PreprocessingPassResult Unroll::applyInternal(AssertionPipeline* ap)
   // `defns` maps every function symbol satisfying property (1) above to the
   // index of its definition in the assertion pipeline `ap`.
   std::unordered_map<Node, size_t> defns;
+  std::vector<Node> itinerary;
 
   // Populate `defns`.
   for (size_t i = 0; i < ap->size(); ++i)
@@ -41,37 +42,14 @@ PreprocessingPassResult Unroll::applyInternal(AssertionPipeline* ap)
     const Node phi = (*ap)[i];
     const Node maybe_head =
         theory::quantifiers::QuantAttributes::getFunDefHead(phi);
-    if (!maybe_head.isNull())
+
+    if (maybe_head.isNull())
     {
-      const Node func = maybe_head.getOperator();
-      defns[func] = i;
-    }
-  }
+      // `phi` is not a "definitional" assertion.  The uninterpreted function
+      // symbols that occur in `phi` should be added to `itinerary` so that we
+      // can eventually record them as well as their dependencies in
+      // `func_syms`.
 
-  // Populate `func_syms` now.  We will build this using a depth-first search.
-  // We will initialize our `itinerary` (a vector) with the set of uninterpreted
-  // function symbols that appear in quantifier-free assertions.  `func_syms` is
-  // our set of visited function symbols.  We pop a function symbol `func` from
-  // the itinerary.  Immediately add it to `func_syms`.  After that check
-  // whether `func` is a key in `defns`.  If it does, in other words if `func`
-  // is defined, we look at the uninterpreted functions that occur in its
-  // definition.  Each featured function symbol should be pushed on to
-  // `itinerary` as long as it is not present in `func_syms`.
-
-  // The stack of nodes we would like to visit.
-  std::vector<Node> itinerary;
-
-  // Loop over assertions.
-  for (size_t i = 0; i < ap->size(); ++i)
-  {
-    const Node phi = (*ap)[i];
-
-    // If `phi` does not have universally or existentially quantified
-    // subterms.
-    if (!expr::hasSubtermKinds({Kind::FORALL, Kind::EXISTS}, phi))
-    {
-      // `tmp` will store all subterms of `phi` that are applications of
-      // uninterpreted functions.
       std::unordered_set<Node> tmp;
       expr::getSubtermsKind(Kind::APPLY_UF, phi, tmp);
 
@@ -81,7 +59,49 @@ PreprocessingPassResult Unroll::applyInternal(AssertionPipeline* ap)
         itinerary.push_back(app.getOperator());
       }
     }
+    else
+    {
+      // `maybe_head` is not `Node::null()`.  `phi` defines a function.  `phi`
+      // is a "definitional" assertion.
+
+      const Node func = maybe_head.getOperator();
+      defns[func] = i;
+    }
   }
+
+  // Populate `func_syms` now.  We will build this using a depth-first search.
+  // We will initialize our `itinerary` (a vector) with the set of uninterpreted
+  // function symbols that appear in assertions that are not definitions.
+  // `func_syms` is our set of visited function symbols.  We pop a function
+  // symbol `func` from the itinerary.  Immediately add it to `func_syms`.
+  // After that check whether `func` is a key in `defns`.  If it does, in other
+  // words if `func` is defined, we look at the uninterpreted functions that
+  // occur in its definition.  Each featured function symbol should be pushed on
+  // to `itinerary` as long as it is not present in `func_syms`.
+
+  // The stack of nodes we would like to visit.
+
+  // Loop over assertions.
+  // for (size_t i = 0; i < ap->size(); ++i)
+  // {
+  //   const Node phi = (*ap)[i];
+
+  //   // If `phi` does not have universally or existentially quantified
+  //   // subterms.
+  //   if (!expr::hasSubtermKinds({Kind::FORALL, Kind::EXISTS}, phi))
+  //   {
+  //     // `tmp` will store all subterms of `phi` that are applications of
+  //     // uninterpreted functions.
+  //     std::unordered_set<Node> tmp;
+  //     expr::getSubtermsKind(Kind::APPLY_UF, phi, tmp);
+
+  //     // We push the operator of each application in `tmp` to `itinerary`.
+  //     for (const Node& app : tmp)
+  //     {
+  //       itinerary.push_back(app.getOperator());
+  //     }
+  //   }
+  // }
 
   // The set of function symbols we've visited.
   std::unordered_set<Node> func_syms;
@@ -162,9 +182,10 @@ PreprocessingPassResult Unroll::applyInternal(AssertionPipeline* ap)
           nodeManager()->mkNode(Kind::BOUND_VAR_LIST, formals),
           body);
 
-      Trace("unroll") << "[applyInternal] Mapping " << func << " to " << lam << "... ";
+      // Trace("unroll") << "[applyInternal] Mapping " << func << " to " << lam
+      //                 << "... ";
       tau.add(func, lam);
-      Trace("unroll") << "mapped." << std::endl;
+      // Trace("unroll") << "mapped." << std::endl;
     }
 
     // Remove all definitions of recursive functions (i.e. replace the assertion
@@ -367,6 +388,8 @@ Node Unroll::unroll(const Node phi, size_t fuel)
   const Node body_ite = elimAndOr(body);
   const Node base_case = baseCase(func, body_ite);
 
+  Trace("unroll") << "Base case of " << func << " is " << base_case << std::endl;
+
   // We maintain a node to hold the current unrolling of the body of `func`.
   // For each iteration of the loop below we collect the set of calls to `func`
   // in `unrolled_body`.  From this set we remove the calls to `func` that are
@@ -428,14 +451,16 @@ Node Unroll::unroll(const Node phi, size_t fuel)
         Subs sigma;
         for (size_t ch = 0; ch < call.getNumChildren(); ++ch)
         {
-          Trace("unroll") << "[unroll, general, sigma] Mapping " << head[ch] << " to " << call[ch] << "... ";
+          // Trace("unroll") << "[unroll, general, sigma] Mapping " << head[ch]
+          //                 << " to " << call[ch] << "... ";
           sigma.add(head[ch], call[ch]);
-          Trace("unroll") << "mapped." << std::endl;
+          // Trace("unroll") << "mapped." << std::endl;
         }
 
-        Trace("unroll") << "[unroll, general, tau] Mapping " << call << " to " << sigma.apply(body) << "... ";
+        // Trace("unroll") << "[unroll, general, tau] Mapping " << call << " to "
+        //                 << sigma.apply(body) << "... ";
         tau.add(call, sigma.apply(body));
-        Trace("unroll") << "mapped." << std::endl;
+        // Trace("unroll") << "mapped." << std::endl;
 
         --fuel;
       }
@@ -488,16 +513,18 @@ Node Unroll::unroll(const Node phi, size_t fuel)
       Subs sigma;
       for (size_t ch = 0; ch < call0.getNumChildren(); ++ch)
       {
-        Trace("unroll") << "[unroll, finite, sigma] Mapping " << head[ch] << " to " << call0[ch] << "... ";
+        // Trace("unroll") << "[unroll, finite, sigma] Mapping " << head[ch]
+        //                 << " to " << call0[ch] << "... ";
         sigma.add(head[ch], call0[ch]);
-        Trace("unroll") << "mapped." << std::endl;
+        // Trace("unroll") << "mapped." << std::endl;
       }
 
       Node expansion0 = sigma.apply(base_case);
 
-      Trace("unroll") << "[unroll, finite, tau] Mapping " << call0 << " to " << expansion0 << "... ";
+      // Trace("unroll") << "[unroll, finite, tau] Mapping " << call0 << " to "
+      //                 << expansion0 << "... ";
       tau.add(call0, expansion0);
-      Trace("unroll") << "mapped." << std::endl;
+      // Trace("unroll") << "mapped." << std::endl;
 
       const size_t n = func_calls.size() - 1;
       std::vector<Node> tmp;
