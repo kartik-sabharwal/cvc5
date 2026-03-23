@@ -20,6 +20,7 @@
 #include "expr/subs.h"
 #include "expr/dtype_cons.h"
 #include "options/quantifiers_options.h"
+#include "options/smt_options.h"
 #include "smt/set_defaults.h"
 #include "theory/quantifiers/first_order_model.h"
 #include "theory/quantifiers/instantiate.h"
@@ -67,6 +68,7 @@ ConflictConjectureGenerator::ConflictConjectureGenerator(
   d_subOptions.write_quantifiers().conjectureGen = false;
   d_subOptions.write_quantifiers().contextualEnumerator = false;
   d_subOptions.write_quantifiers().conflictConjectureGen = false;
+  d_subOptions.write_smt().coneOfInfluence = false;
   d_subOptions.write_quantifiers().poolInst = false;
   smt::SetDefaults::disableChecking(d_subOptions);
 }
