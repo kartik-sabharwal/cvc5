@@ -378,6 +378,11 @@ bool ProcessAssertions::apply(AssertionPipeline& ap)
     applyPass("bv-eager-atoms", ap);
   }
 
+  if (options().smt.coneOfInfluence)
+  {
+    applyPass("cone-of-influence", ap);
+  }
+
   Trace("smt-proc") << "ProcessAssertions::apply() end" << endl;
   dumpAssertions("assertions::post-everything", ap);
   Trace("assertions::post-everything") << std::endl;

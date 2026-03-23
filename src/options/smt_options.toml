@@ -547,3 +547,12 @@ name   = "SMT Layer"
   type       = "bool"
   default    = "true"
   help       = "print define-fun commands for top-level substitutions when dumping assertions"
+
+[[option]]
+  name       = "coneOfInfluence"
+  category   = "expert"
+  long       = "cone-of-influence"
+  type       = "bool"
+  default    = "false"
+  help       = "ignore irrelevant assertions"
+

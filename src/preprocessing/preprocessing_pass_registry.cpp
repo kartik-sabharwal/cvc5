@@ -57,6 +57,7 @@
 #include "preprocessing/passes/synth_rew_rules.h"
 #include "preprocessing/passes/theory_preprocess.h"
 #include "preprocessing/passes/unconstrained_simplifier.h"
+#include "preprocessing/passes/cone_of_influence.h"
 #include "preprocessing/preprocessing_pass.h"
 
 namespace cvc5::internal {
@@ -159,6 +160,7 @@ PreprocessingPassRegistry::PreprocessingPassRegistry()
   registerPassInfo("static-rewrite", callCtor<StaticRewrite>);
   registerPassInfo("strings-eager-pp", callCtor<StringsEagerPp>);
   registerPassInfo("normalize", callCtor<Normalize>);
+  registerPassInfo("cone-of-influence", callCtor<ConeOfInfluence>);
 }
 
 }  // namespace preprocessing
