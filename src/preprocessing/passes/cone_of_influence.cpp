@@ -14,10 +14,14 @@ ConeOfInfluence::ConeOfInfluence(PreprocessingPassContext* ppc)
 
 PreprocessingPassResult ConeOfInfluence::applyInternal(AssertionPipeline* ap)
 {
+  Trace("cone-of-influence") << "Initializing...";
+
   const size_t num_asserts = ap->size();
 
+  const Node tt = nodeManager()->mkConst(true);
+
   std::vector<std::vector<TNode>> syms_in_assert;
-  syms_in_assert.reserve(num_asserts);
+  syms_in_assert.resize(num_asserts);
 
   std::unordered_map<TNode, std::vector<size_t>> asserts_with;
 
@@ -25,27 +29,57 @@ PreprocessingPassResult ConeOfInfluence::applyInternal(AssertionPipeline* ap)
 
   std::unordered_set<size_t> visited;
 
-  const Node tt = nodeManager()->mkConst(true);
+  Trace("cone-of-influence") << "done." << std::endl;
+
+  Trace("cone-of-influence") << "Constructing syms_in_assert and asserts_with..." << std::endl;
 
   for (size_t i = 0; i < num_asserts; ++i)
   {
     std::unordered_set<Node> syms;
     TNode phi = ap->operator[](i);
+
+    Trace("cone-of-influence") << "Getting syms_in_assert[" << i << "]..." << std::endl;
+
     std::vector<TNode>& syms_in_this_assert = syms_in_assert[i];
+
+    Trace("cone-of-influence") << "..got it." << std::endl;
+
+    Trace("cone-of-influence") << "Processing assertion " << phi << " {" << std::endl;
+
+    Trace("cone-of-influence") << "Getting variables in assertion..." << std::endl;
 
     expr::getSubtermsKind(Kind::VARIABLE, phi, syms, false);
 
+    Trace("cone-of-influence") << "...got." << std::endl;
+
     for (TNode sym : syms)
     {
+      Trace("cone-of-influence") << "Adding to syms_in_this_assert..." << std::endl;
+
       syms_in_this_assert.push_back(sym);
+
+      Trace("cone-of-influence") << "...added." << std::endl;
+
+      Trace("cone-of-influence") << "Adding to asserts_with..." << std::endl;
+
       asserts_with[sym].push_back(i);
+
+      Trace("cone-of-influence") << "...added." << std::endl;
     }
+
+    Trace("cone-of-influence") << "Adding goals to itinerary..." << std::endl;
 
     if (phi.getKind() == Kind::NOT)
     {
       itinerary.push_back(i);
     }
+
+    Trace("cone-of-influence") << "...added." << std::endl;
+
+    Trace("cone-of-influence") << "}" << std::endl;
   }
+
+  Trace("cone-of-influence") << "...done." << std::endl;
 
   if (TraceIsOn("cone-of-influence"))
   {
@@ -79,6 +113,8 @@ PreprocessingPassResult ConeOfInfluence::applyInternal(AssertionPipeline* ap)
     out << "}" << std::endl;
   }
 
+  Trace("cone-of-influence") << "Running the DFS..." << std::endl;
+
   while (!itinerary.empty())
   {
     const size_t dest = itinerary.back();
@@ -102,6 +138,8 @@ PreprocessingPassResult ConeOfInfluence::applyInternal(AssertionPipeline* ap)
       }
     }
   }
+
+  Trace("cone-of-influence") << "...done." << std::endl;
 
   Trace("cone-of-influence") << "Discard assertions {" << std::endl;
   for (size_t i = 0; i < num_asserts; ++i)
