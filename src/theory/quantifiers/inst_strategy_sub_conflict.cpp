@@ -47,6 +47,9 @@ InstStrategySubConflict::InstStrategySubConflict(
   d_subOptions.write_smt().produceUnsatCores = true;
   // don't do this strategy
   d_subOptions.write_quantifiers().quantSubCbqi = false;
+  // don't use these options associated with conjecture generation
+  d_subOptions.write_quantifiers().conflictConjectureGen = false;
+  d_subOptions.write_quantifiers().contextualEnumerator = false;
   // initialize the trust proof generator if necessary
   if (d_env.isTheoryProofProducing())
   {
