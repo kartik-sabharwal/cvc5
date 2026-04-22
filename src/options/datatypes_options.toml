@@ -172,3 +172,19 @@ name   = "Datatypes Theory"
   type       = "bool"
   default    = "true"
   help       = "enables reasoning about codatatypes and extended datatype terms"
+
+[[option]]
+  name       = "dtEagerSplitFull"
+  category   = "expert"
+  long       = "dt-eager-split-full=N"
+  type       = "int64_t"
+  default    = "-1"
+  help       = "the datatypes solver will split on the possible constructors of inductive datatype terms, even if no selector is applied, every N invocations of the datatypes solver at full effort (-1 == do not split, default)"
+
+[[option]]
+  name       = "dtEagerSplitLastCall"
+  category   = "expert"
+  long       = "dt-eager-split-last-call"
+  type       = "bool"
+  default    = "false"
+  help       = "the datatypes solver will split on the possible constructors of inductive datatype terms every invocation of the datatypes solver at last call effort"
