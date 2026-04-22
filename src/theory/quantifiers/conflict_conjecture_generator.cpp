@@ -1000,7 +1000,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
   Subs subs;
 
   // We elect to expand fvs[rindex].
-  size_t rindex = Random::getRandom().pick(0, fvs.size() - 1);
+  size_t rindex = Random::getRandom().pick(0, (int) fvs.size() - 1);
 
   // One iteration of this loop for each step we intend to take in our random
   // walk.
@@ -1060,7 +1060,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     }
 
     // We choose to expand vc to gens[gindex] which we copy over to g.
-    size_t gindex = Random::getRandom().pick(0, gens.size() - 1);
+    size_t gindex = Random::getRandom().pick(0, (int) gens.size() - 1);
     Node g = gens[gindex];
 
     // Let's give some thought to what we're about to do here.  We have a
@@ -1111,7 +1111,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     if (expr::hasSubterm(gs, vc))
     {
       Trace("ccgen-debug") << "...cyclic to " << gs << std::endl;
-      rindex = Random::getRandom().pick(0, fvs.size() - 1);
+      rindex = Random::getRandom().pick(0, (int) fvs.size() - 1);
       // cyclic, skip
       continue;
     }
@@ -1210,7 +1210,7 @@ void ConflictConjectureGenerator::getGeneralizationsInternal(const Node& v)
     }
     
     // We will expand fvs[rindex] in the next iteration of this loop.
-    rindex = Random::getRandom().pick(0, fvs.size() - 1);
+    rindex = Random::getRandom().pick(0, (int) fvs.size() - 1);
   }
 }
 

@@ -178,10 +178,7 @@ Node ContextualEnumerator::getPredicateForType(TypeNode typ)
 
     TypeNode pred_typ = node_mgr->mkFunctionType(typ, node_mgr->booleanType());
 
-    Node pred = NodeManager::mkDummySkolem(
-        "PE",
-        pred_typ,
-        "was created by the contextual ground term enumerator.");
+    Node pred = NodeManager::mkDummySkolem("PE", pred_typ);
 
     d_typ_pred[typ] = pred;
 
