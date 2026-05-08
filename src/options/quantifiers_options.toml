@@ -1929,3 +1929,19 @@ name   = "Quantifiers"
 [[option.mode.INTERLEAVE]]
   name = "interleave"
   help = "add instantiation and evaluation unfolding lemmas in the same step."
+
+[[option]]
+  name     = "enumerativeConjectureGenerator"
+  category = "expert"
+  long     = "enumerative-conjecture-generator"  
+  type     = "bool"
+  default  = "false"
+  help     = "use the new enumerative conjecture generator"
+
+[[option]]
+  name     = "enumerativeConjectureGeneratorMaximumSize"
+  category = "expert"
+  long     = "enumerative-conjecture-generator-maximum-size=N"
+  type     = "size_t"
+  default  = "0"
+  help     = "the size of the largest term that can appear on either side of a conjectured equality"

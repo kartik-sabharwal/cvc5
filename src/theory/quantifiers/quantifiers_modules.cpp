@@ -129,6 +129,11 @@ void QuantifiersModules::initialize(Env& env,
     d_oracleEngine.reset(new OracleEngine(env, qs, qim, qr, tr));
     modules.push_back(d_oracleEngine.get());
   }
+  if (options.quantifiers.enumerativeConjectureGenerator)
+  {
+    d_enumerativeConjectureGenerator.reset(new EnumerativeConjectureGenerator(env, qs, qim, qr, tr));
+    modules.push_back(d_enumerativeConjectureGenerator.get());
+  }
 }
 
 }  // namespace quantifiers

@@ -1326,6 +1326,8 @@ libcvc5_add_sources(
   theory/uf/type_enumerator.h
   theory/valuation.cpp
   theory/valuation.h
+  theory/quantifiers/enumerative_conjecture_generator.h
+  theory/quantifiers/enumerative_conjecture_generator.cpp
 )
 
 # suppress deprecated warnings to not error in CI

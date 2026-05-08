@@ -32,6 +32,7 @@
 #include "theory/quantifiers/quant_split.h"
 #include "theory/quantifiers/sygus/synth_engine.h"
 #include "theory/quantifiers/sygus_inst.h"
+#include "theory/quantifiers/enumerative_conjecture_generator.h"
 
 namespace cvc5::internal {
 namespace theory {
@@ -101,6 +102,8 @@ class QuantifiersModules
   std::unique_ptr<InstStrategyMbqi> d_mbqi;
   /** Oracle engine */
   std::unique_ptr<OracleEngine> d_oracleEngine;
+  /** Enumerative conjecture (subgoal) generator */
+  std::unique_ptr<EnumerativeConjectureGenerator> d_enumerativeConjectureGenerator;
 };
 
 }  // namespace quantifiers
