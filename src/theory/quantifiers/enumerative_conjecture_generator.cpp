@@ -138,7 +138,7 @@ void EnumerativeConjectureGenerator::check(Theory::Effort, QEffort)
 
     if (!hasKey(d_typeToIn, domainType))
     {
-      const TypeNode inType = d_nodeManager->mkFunctionType(inType, d_rootType);
+      const TypeNode inType = d_nodeManager->mkFunctionType(domainType, d_rootType);
       const Node inFunc = skolemManager->mkDummySkolem("in", inType);
       d_typeToIn[domainType] = inFunc;
     }
@@ -342,15 +342,25 @@ void EnumerativeConjectureGenerator::check(Theory::Effort, QEffort)
       break;
     }
 
-    std::vector<std::vector<Node>> compatible = findCompatible(*termRef);
+    std::vector<std::vector<Node>> sizeToCompatible = findCompatible(*termRef);
 
     ecg << "RHS terms for LHS " << *termRef << std::endl;
 
-    for (std::vector<Node>::const_iterator rhsRef = compatible.begin();
-         rhsRef != compatible.end();
-         ++rhsRef)
+    for (size_t rhsSize = 0; rhsSize <= d_maximumSize; ++rhsSize)
     {
-      ecg << "candidate " << *rhsRef << std::endl;
+      std::vector<Node>& compatible = sizeToCompatible[rhsSize];
+
+      if (!compatible.empty())
+      {
+        ecg << "Terms with size " << rhsSize << std::endl;
+
+        for (std::vector<Node>::const_iterator rhsRef = compatible.begin();
+             rhsRef != compatible.end();
+             ++rhsRef)
+        {
+          ecg << "Term " << *rhsRef << std::endl;
+        }
+      }
     }
 
     --fuel;
@@ -463,7 +473,7 @@ EnumerativeConjectureGeneratorCallback::EnumerativeConjectureGeneratorCallback(
     EnumerativeConjectureGenerator* enumerativeConjectureGenerator,
     size_t maximumSize)
     : d_enumerativeConjectureGenerator(enumerativeConjectureGenerator),
-      d_maximumSize(maximumSize){};
+      d_maximumSize(maximumSize) {};
 
 bool EnumerativeConjectureGeneratorCallback::addTerm(const Node& sygusN,
                                                      std::unordered_set<Node>&)
@@ -573,11 +583,14 @@ void EnumerativeConjectureGenerator::debugPrintIndex(std::ostream& out)
   }
 }
 
-std::vector<Node> EnumerativeConjectureGenerator::findCompatible(TNode lhs)
+std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
+    TNode lhs)
 {
   std::ostream& ecg = Trace("enumerative-conjecture-generator");
 
-  std::vector<Node> compatible;
+  std::vector<std::vector<Node>> sizeToCompatible;
+
+  sizeToCompatible.resize(d_maximumSize + 1);
 
   std::unordered_set<Node> variableSet;
 
@@ -626,7 +639,16 @@ std::vector<Node> EnumerativeConjectureGenerator::findCompatible(TNode lhs)
 
     std::map<Node, Index>& jobVariableToIndex = jobIndex->d_variableToIndex;
 
-    compatible.insert(compatible.end(), jobTerms.begin(), jobTerms.end());
+    for (std::vector<Node>::const_iterator termRef = jobTerms.begin();
+         termRef != jobTerms.end();
+         ++termRef)
+    {
+      Node term = *termRef;
+
+      const size_t termSize = computeSize(term);
+
+      sizeToCompatible[termSize].push_back(term);
+    }
 
     for (size_t position = jobPosition; position < variableCount; ++position)
     {
@@ -641,7 +663,7 @@ std::vector<Node> EnumerativeConjectureGenerator::findCompatible(TNode lhs)
     delete job;
   }
 
-  return compatible;
+  return sizeToCompatible;
 }
 }  // namespace quantifiers
 }  // namespace theory

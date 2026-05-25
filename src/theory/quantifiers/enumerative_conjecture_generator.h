@@ -99,7 +99,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
 
   void debugPrintIndex(std::ostream& out);
 
-  std::vector<Node> findCompatible(TNode lhs);
+  std::vector<std::vector<Node>> findCompatible(TNode lhs);
 };
 
 class EnumerativeConjectureGeneratorCallback : public SygusTermEnumeratorCallback
