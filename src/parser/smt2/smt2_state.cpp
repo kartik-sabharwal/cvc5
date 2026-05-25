@@ -147,6 +147,7 @@ void Smt2State::addDatatypesOperators()
   {
     ParserState::addOperator(Kind::APPLY_UPDATER);
     addIndexedOperator(Kind::APPLY_UPDATER, "update");
+    addIndexedOperator(Kind::APPLY_UPDATER, "update-field");
     // Tuple projection is both indexed and non-indexed (when indices are empty)
     addOperator(Kind::TUPLE_PROJECT, "tuple.project");
     addIndexedOperator(Kind::TUPLE_PROJECT, "tuple.project");
