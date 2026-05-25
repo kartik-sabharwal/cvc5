@@ -38,7 +38,7 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN 1)
 
 # Generate compile_commands.json, which can be used for various code completion
 # plugins.
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS OFF)
 
 # Default component used in install() commands
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME cvc5)

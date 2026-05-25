@@ -5,14 +5,20 @@
 
 #include "smt/env_obj.h"
 #include "theory/quantifiers/quant_module.h"
+#include "expr/sygus_term_enumerator.h"
+#include "theory/quantifiers/sygus/sygus_enumerator.h"
+#include "expr/term_canonize.h"
 
 namespace cvc5::internal {
 namespace theory {
 namespace quantifiers {
 
+class Index;
+
 class EnumerativeConjectureGenerator : public QuantifiersModule
 {
  public:
+  // Functions
   EnumerativeConjectureGenerator(Env& env,
                                  QuantifiersState& qs,
                                  QuantifiersInferenceManager& qim,
@@ -23,6 +29,16 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   void reset_round(Theory::Effort e) override;
   void check(Theory::Effort e, QEffort quant_e) override;
   std::string identify() const override;
+  size_t computeSize(TNode n);
+  size_t underestimateSize(TNode n);
+
+  // Fields
+  /** The sort of the root non-terminal. */
+  TypeNode d_rootType;
+  /** The map from canonical variables to LHS/RHS terms. */
+  std::map<Node, Index> d_variableToIndex;
+  /** The maximum size, "generalization depth", of an LHS/RHS term. */
+  size_t d_maximumSize;
 
  private:
   // Fields
@@ -43,10 +59,13 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       Every function symbol is mapped to APPLY_UF and every constructor symbol
       is mapped to APPLY_CONSTRUCTOR. */
   std::unordered_map<TNode, Kind> d_symbolToKind;
+  /** Maps each relevant type to a list of "free" variables of that type. */
+  std::unordered_map<TypeNode, std::vector<Node>> d_typeToVariables;
+  /** Term canonization utility. */
+  expr::TermCanonize d_termCanonize;
+
   /** Pointer to the current node manager. */
   NodeManager* d_nodeManager;
-  /** The sort of the root non-terminal. */
-  TypeNode d_rootType;
   /** The root non-terminal symbol. */
   Node d_rootNonTerminal;
 
@@ -58,11 +77,48 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   }
 
   template <class T>
+  static bool member(std::unordered_set<T> set, T val)
+  {
+    return set.find(val) != set.end();
+  }
+
+  template <class T>
   static bool hasKey(const std::unordered_map<TypeNode, T>& m,
                      const TypeNode& k)
   {
     return m.find(k) != m.end();
   }
+
+  template <class T>
+  static bool hasKey(const std::map<Node, T>& m, const Node& k)
+  {
+    return m.find(k) != m.end();
+  }
+
+  void addTerm(Node term, std::unordered_set<Node>& boundVariableSet);
+
+  void debugPrintIndex(std::ostream& out);
+
+  std::vector<Node> findCompatible(TNode lhs);
+};
+
+class EnumerativeConjectureGeneratorCallback : public SygusTermEnumeratorCallback
+{
+ bool addTerm(const Node& n, std::unordered_set<Node>& bterms) override;
+
+ private:
+  EnumerativeConjectureGenerator* d_enumerativeConjectureGenerator;
+  size_t d_maximumSize;
+
+ public:
+  EnumerativeConjectureGeneratorCallback(EnumerativeConjectureGenerator* enumerativeConjectureGenerator, size_t maximumSize);
+};
+
+class Index
+{
+ public:
+  std::vector<Node> d_terms;
+  std::map<Node, Index> d_variableToIndex;
 };
 
 }  // namespace quantifiers
