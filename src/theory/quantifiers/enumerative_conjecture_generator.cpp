@@ -481,15 +481,21 @@ void EnumerativeConjectureGenerator::checkHelper()
       enumerationData = getEnumerationData(
           sygusTermEnumerator, d_termCanonize, d_maximumSize);
 
-  CVC5_UNUSED std::vector<std::unordered_set<Node>>& sizeToCanonicals =
-      std::get<0>(enumerationData);
+  std::vector<std::unordered_set<Node>>& sizeToCanonicals = std::get<0>(enumerationData);
 
   CVC5_UNUSED std::unordered_map<Node, Index>& variableToIndex =
       std::get<1>(enumerationData);
 
-  debugPrintSizeToCanonicals(traceStream, d_maximumSize, sizeToCanonicals);
+  // debugPrintSizeToCanonicals(traceStream, d_maximumSize, sizeToCanonicals);
 
-  debugPrintIndex(traceStream, variableToIndex);
+  // debugPrintIndex(traceStream, variableToIndex);
+
+  debugPrintAllSubstitutions(traceStream,
+                             termDatabase,
+                             getEqualityEngine(),
+                             sizeToCanonicals,
+                             d_preferConstRepresentatives,
+                             d_preferActiveTerms);
 
   // traceStream << d_qstate.getEqualityEngine()->debugPrintEqc();
 
@@ -546,6 +552,47 @@ void EnumerativeConjectureGenerator::checkHelper()
   //
 
   endCallDebug();
+}
+
+void EnumerativeConjectureGenerator::debugPrintAllSubstitutions(
+    std::ostream& out,
+    TermDb* termDatabase,
+    eq::EqualityEngine* equalityEngine,
+    const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
+    const bool preferConstRepresentatives,
+    const bool preferActiveTerms)
+{
+  for (size_t size = 0; size < sizeToCanonicals.size(); ++size)
+  {
+    out << "Size " << size << ":" << std::endl;
+
+    const std::unordered_set<Node>& canonicals = sizeToCanonicals[size];
+
+    typedef std::unordered_set<Node>::const_iterator NodePtr;
+
+    for (NodePtr canonicalPtr = canonicals.begin();
+         canonicalPtr != canonicals.end();
+         ++canonicalPtr)
+    {
+      out << "- Canonical " << *canonicalPtr << std::endl;
+
+      std::vector<Subs> substitutions =
+          findSubstitutions(termDatabase,
+                            equalityEngine,
+                            canonicalPtr->operator[](0),
+                            preferConstRepresentatives,
+                            preferActiveTerms);
+
+      typedef std::vector<Subs>::const_iterator SubsPtr;
+
+      for (SubsPtr sigmaPtr = substitutions.begin();
+           sigmaPtr != substitutions.end();
+           ++sigmaPtr)
+      {
+        out << "-- Substitution " << *sigmaPtr << std::endl;
+      }
+    }
+  }
 }
 
 void EnumerativeConjectureGenerator::check(CVC5_UNUSED Theory::Effort effort,
@@ -662,28 +709,6 @@ std::string EnumerativeConjectureGenerator::identify() const
   return "enumerative-conjecture-generator";
 }
 
-EnumerativeConjectureGeneratorCallback::EnumerativeConjectureGeneratorCallback(
-    EnumerativeConjectureGenerator* enumerativeConjectureGenerator,
-    size_t maximumSize)
-    : d_enumerativeConjectureGenerator(enumerativeConjectureGenerator),
-      d_maximumSize(maximumSize) {};
-
-bool EnumerativeConjectureGeneratorCallback::addTerm(const Node& sygusN,
-                                                     std::unordered_set<Node>&)
-{
-  bool result = true;
-
-  const Node n = datatypes::utils::sygusToBuiltin(sygusN);
-
-  if (n.getType() != d_enumerativeConjectureGenerator->d_rootType
-      && d_enumerativeConjectureGenerator->computeSize(n) > d_maximumSize)
-  {
-    result = false;
-  }
-
-  return result;
-}
-
 void EnumerativeConjectureGenerator::addTerm(
     expr::TermCanonize& termCanonize,
     const Node term,
@@ -756,10 +781,10 @@ void EnumerativeConjectureGenerator::debugPrintIndex(
        entryPtr != rootVariableToIndex.end();
        ++entryPtr)
   {
-#define entry *entryPtr
+#define ENTRY *entryPtr
     jobs.emplace_back(
-        new Job{std::vector<Node>{std::get<0>(entry)}, &std::get<1>(entry)});
-#undef entry
+        new Job{std::vector<Node>{std::get<0>(ENTRY)}, &std::get<1>(ENTRY)});
+#undef ENTRY
   }
 
   while (!jobs.empty())
@@ -780,13 +805,13 @@ void EnumerativeConjectureGenerator::debugPrintIndex(
          entryPtr != variableToIndex.end();
          ++entryPtr)
     {
-#define entry *entryPtr
+#define ENTRY *entryPtr
       std::vector<Node> branchPath;
       branchPath.insert(branchPath.end(), path.begin(), path.end());
-      branchPath.push_back(std::get<0>(entry));
+      branchPath.push_back(std::get<0>(ENTRY));
 
-      jobs.emplace_back(new Job{branchPath, &std::get<1>(entry)});
-#undef entry
+      jobs.emplace_back(new Job{branchPath, &std::get<1>(ENTRY)});
+#undef ENTRY
     }
 
     delete job;
@@ -892,161 +917,133 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
   return sizeToCompatible;
 }
 
-std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
-    TNode canonical,
-    const bool preferConstRepresentatives,
-    const bool preferActiveTerms)
+TypeNode EnumerativeConjectureGenerator::findTypeByName(
+    const std::string& name, const std::vector<TypeNode>& types)
 {
-  std::vector<Subs> substitutions;
+  typedef std::vector<TypeNode>::const_iterator TypePtr;
 
-  std::vector<Node> preferredRepresentatives;
-
-  TermDb* termDatabase = getTermDatabase();
-
-  eq::EqualityEngine* equalityEngine = d_qstate.getEqualityEngine();
-
-  for (eq::EqClassesIterator representativeRef =
-           eq::EqClassesIterator(equalityEngine);
-       !representativeRef.isFinished();
-       ++representativeRef)
-  {
-    Node representative = *representativeRef;
-
-    if (representative.getType() == canonical.getType())
-    {
-      // preferConstRepresentatives ==> representative.isConst()
-      if (!preferConstRepresentatives || representative.isConst())
-      {
-        preferredRepresentatives.push_back(representative);
-      }
-    }
-  }
-
-  for (std::vector<Node>::iterator representativeRef =
-           preferredRepresentatives.begin();
-       representativeRef != preferredRepresentatives.end();
-       ++representativeRef)
-  {
-    Node representative = *representativeRef;
-
-    Subs substitution;
-
-    Trail decisionQueue;
-
-    decisionQueue.emplace_back(new Decision(termDatabase,
-                                            equalityEngine,
-                                            canonical,
-                                            representative,
-                                            preferConstRepresentatives,
-                                            preferActiveTerms));
-
-    size_t decisionQueueFront = 0;
-
-    bool goOn = true;
-
-    while (goOn)
-    {
-      size_t decisionQueueBack = decisionQueue.size() - 1;
-
-      const bool decisionQueueEmpty = decisionQueueFront > decisionQueueBack;
-
-      if (decisionQueueEmpty)
-      {
-        substitutions.push_back(substitution);
-
-        if (decisionQueueFront > 0)
-        {
-          decisionQueueFront = decisionQueueBack;
-
-          decisionQueue[decisionQueueFront]->pop(substitution);
-        }
-        else
-        {
-          goOn = false;
-        }
-      }
-      else
-      {
-        Decision* decision = decisionQueue[decisionQueueFront];
-
-        if (decision->isFinished())
-        {
-          if (decisionQueueFront > 0)
-          {
-            for (size_t i = 0; i < decisionQueue.size() - decisionQueueFront;
-                 ++i)
-            {
-              Decision* decisionToDelete = decisionQueue.back();
-
-              decisionQueue.pop_back();
-
-              delete decisionToDelete;
-            }
-
-            --decisionQueueFront;
-
-            decisionQueue[decisionQueueFront]->pop(substitution);
-          }
-          else
-          {
-            goOn = false;
-          }
-        }
-        else if (decision->push(
-                     termDatabase, equalityEngine, substitution, decisionQueue))
-        {
-          ++decisionQueueFront;
-        }
-        else
-        {
-          decision->pop(substitution);
-        }
-      }
-    }
-  }
-
-  return substitutions;
-}
-
-TypeNode EnumerativeConjectureGenerator::findTypeByName(const std::string& name)
-{
   TypeNode result = TypeNode::null();
 
-  std::vector<TypeNode>::const_iterator typeRef = std::find_if(
-      d_relevantTypes.begin(),
-      d_relevantTypes.end(),
-      [name](const TypeNode& type) {
-        const std::string typeName = (std::stringstream() << type).str();
-        const int result = typeName.compare(name);
-        return result == 0;
+  TypePtr typePtr =
+      std::find_if(types.begin(), types.end(), [name](const TypeNode& type) {
+        return name.compare((std::stringstream() << type).str()) == 0;
       });
 
-  if (typeRef != d_relevantTypes.end())
+  if (typePtr != types.end())
   {
-    result = *typeRef;
+    result = *typePtr;
   }
 
   return result;
 }
 
 Node EnumerativeConjectureGenerator::findFunctionSymbolByName(
-    const std::string& name)
+    const std::string& name, const std::vector<Node>& symbols)
 {
+  typedef std::vector<Node>::const_iterator SymbolPtr;
+
   Node result = Node::null();
 
-  std::vector<Node>::const_iterator functionSymbolRef =
-      std::find_if(d_relevantFunctionSymbols.begin(),
-                   d_relevantFunctionSymbols.end(),
-                   [name](TNode functionSymbol) {
-                     return functionSymbol.getName() == name;
-                   });
+  SymbolPtr symbolPtr =
+      std::find_if(symbols.begin(), symbols.end(), [name](TNode symbol) {
+        return symbol.getName() == name;
+      });
 
-  if (functionSymbolRef != d_relevantFunctionSymbols.end())
+  if (symbolPtr != symbols.end())
   {
-    result = *functionSymbolRef;
+    result = *symbolPtr;
   }
 
   return result;
+}
+
+std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
+    TermDb* termDatabase,
+    eq::EqualityEngine* equalityEngine,
+    TNode canonical,
+    const bool preferConstRepresentatives,
+    const bool preferActiveTerms)
+{
+#define IMPLIES(implicant, implicand) (!(implicant) || (implicand))
+
+  std::vector<Subs> substitutions;
+  std::vector<Node> preferredClasses;
+
+  typedef std::vector<Node>::const_iterator ReprPtr;
+
+  for (eq::EqClassesIterator reprPtr = eq::EqClassesIterator(equalityEngine);
+       !reprPtr.isFinished();
+       ++reprPtr)
+  {
+    const Node repr = *reprPtr;
+
+    if (repr.getType() == canonical.getType()
+        && IMPLIES(preferConstRepresentatives, repr.isConst()))
+    {
+      preferredClasses.push_back(repr);
+    }
+  }
+
+  for (ReprPtr reprPtr = preferredClasses.begin();
+       reprPtr != preferredClasses.end();
+       ++reprPtr)
+  {
+    Trail decisionQueue;
+    decisionQueue.emplace_back(new Decision(termDatabase,
+                                            equalityEngine,
+                                            canonical,
+                                            *reprPtr,
+                                            preferConstRepresentatives,
+                                            preferActiveTerms));
+
+    size_t virtualBegin = 0;
+
+    Subs substitution;
+
+    while (!decisionQueue.empty() && virtualBegin <= decisionQueue.size()
+           && IMPLIES(virtualBegin < decisionQueue.size()
+                          && decisionQueue[virtualBegin]->isFinished(),
+                      virtualBegin > 0))
+    {
+      if (virtualBegin == decisionQueue.size())
+      {
+        // virtualBegin > 0 because decisionQueue.size() > 0
+
+        substitutions.push_back(substitution);
+        
+        --virtualBegin;
+
+        decisionQueue[virtualBegin]->pop(substitution);
+      }
+      else if (decisionQueue[virtualBegin]->isFinished())
+      {
+        // virtualBegin > 0 because of all three: loop guard, virtualBegin !=
+        // decisionQueue.size(), and decisionQueue[virtualBegin]->isFinished()
+
+        for (size_t i = 0; i < decisionQueue.size() - virtualBegin; ++i)
+        {
+          delete decisionQueue.back();
+          decisionQueue.pop_back();
+        }
+
+        --virtualBegin;
+
+        decisionQueue[virtualBegin]->pop(substitution);
+      }
+      else if (decisionQueue[virtualBegin]->push(
+                   termDatabase, equalityEngine, substitution, decisionQueue))
+      {
+        ++virtualBegin;
+      }
+      else
+      {
+        decisionQueue[virtualBegin]->pop(substitution);
+      }
+    }
+  }
+
+  return substitutions;
+#undef IMPLIES
 }
 
 Decision::Decision(TermDb* termDatabase,
