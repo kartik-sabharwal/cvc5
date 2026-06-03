@@ -1945,3 +1945,35 @@ name   = "Quantifiers"
   type     = "size_t"
   default  = "0"
   help     = "the size of the largest term that can appear on either side of a conjectured equality"
+
+[[option]]
+  name     = "enumerativeConjectureGeneratorMaximumDifference"
+  category = "expert"
+  long     = "enumerative-conjecture-generator-maximum-difference=N"
+  type     = "size_t"
+  default  = "0"
+  help     = "the maximum difference between the number of free variables on the left-hand and right-hand sides of an equality conjecture"
+
+[[option]]
+  name     = "enumerativeConjectureGeneratorPeriod"
+  category = "expert"
+  long     = "enumerative-conjecture-generator-period=N"
+  type     = "size_t"
+  default  = "0"
+  help     = "how often we should generate conjectures"
+
+[[option]]
+  name     = "preferConstRepresentatives"
+  category = "expert"
+  long     = "prefer-const-representatives"
+  type     = "bool"
+  default  = "false"
+  help     = "should we prefer 'const' representatives when searching for substitutions"
+
+[[option]]
+  name     = "preferActiveTerms"
+  category = "expert"
+  long     = "prefer-active-terms"
+  type     = "bool"
+  default  = "false"
+  help     = "should we prefer 'active' members of equivalence classes when searching for substitutions"

@@ -1,14 +1,22 @@
 #include "theory/quantifiers/enumerative_conjecture_generator.h"
 
+#include <sstream>
+#include <unordered_map>
+#include <unordered_set>
+
+#include "cvc5_public.h"
 #include "expr/node_algorithm.h"
 #include "expr/skolem_manager.h"
+#include "expr/subs.h"
 #include "expr/sygus_grammar.h"
+#include "preprocessing/passes/synth_rew_rules.h"
 #include "theory/datatypes/sygus_datatype_utils.h"
 
 namespace cvc5::internal {
 namespace theory {
 namespace quantifiers {
-static std::ostream& operator<<(std::ostream& out, std::vector<TypeNode>& vec)
+CVC5_UNUSED static std::ostream& operator<<(std::ostream& out,
+                                            std::vector<TypeNode>& vec)
 {
   out << "{";
   std::vector<TypeNode>::iterator eltRef = vec.begin();
@@ -39,6 +47,13 @@ EnumerativeConjectureGenerator::EnumerativeConjectureGenerator(
   d_rootNonTerminal = NodeManager::mkBoundVar(d_rootType);
   d_maximumSize =
       options().quantifiers.enumerativeConjectureGeneratorMaximumSize;
+  d_maximumDifference =
+      options().quantifiers.enumerativeConjectureGeneratorMaximumDifference;
+  d_clock = 0;
+  d_period = options().quantifiers.enumerativeConjectureGeneratorPeriod;
+  d_preferConstRepresentatives =
+      options().quantifiers.preferConstRepresentatives;
+  d_preferActiveTerms = options().quantifiers.preferActiveTerms;
 }
 
 EnumerativeConjectureGenerator::~EnumerativeConjectureGenerator() {}
@@ -50,337 +65,510 @@ bool EnumerativeConjectureGenerator::needsCheck(Theory::Effort e)
 
 void EnumerativeConjectureGenerator::reset_round(Theory::Effort) {}
 
-void EnumerativeConjectureGenerator::check(Theory::Effort, QEffort)
+void EnumerativeConjectureGenerator::updateClock(const QEffort qEffort,
+                                                 size_t& clock,
+                                                 const size_t period)
 {
-  beginCallDebug();
-
-  std::ostream& ecg = Trace("enumerative-conjecture-generator");
-
-  // We clear `d_rlvFuncSyms`.
-
-  d_rlvFuncSyms.clear();
-  d_rlvTypes.clear();
-
-  // We populate `d_rlvFuncSyms`.
-
-  TermDb* termDb = getTermDatabase();
-
-  for (size_t i = 0; i < termDb->getNumOperators(); ++i)
+  if (qEffort == QEFFORT_STANDARD)
   {
-    Node op = termDb->getOperator(i);
+    ++clock;
 
-    // We only want to move ahead when `op` is an uninterpreted function symbol
-    // or a constructor symbol.  As it stands `op` might be an application of a
-    // selector symbol or a tester symbol.  We **do not** want to proceed when
-    // `op` is an application of a selector symbol or a tester symbol.  Let's
-    // use the next block of code to set the value of `skip_op`.
+    clock %= period;
+  }
+}
 
-    bool skipOp = false;
+std::vector<Node> EnumerativeConjectureGenerator::getRelevantFunctionSymbols(
+    TermDb* termDatabase)
+{
+  /* Suppose we get the i th "operator" from the term database.  "operator" in
+     this case means one of: uninterpreted function symbol, constructor symbol,
+     application of tester symbol, or application of selector symbol.  We want
+     to ignore the latter two and direct our attention to function symbols and
+     constructor symbols.  A function symbol or a constructor symbol is
+     *relevant* only if it appears in some ground term.
 
-    if (op.hasOperator())
+     This function returns a vector<TNode> and not a vector<Node> because the
+     relevant function symbols and constructor symbols are "owned" by the term
+     database. */
+
+  std::vector<Node> result;
+
+  for (size_t i = 0; i < termDatabase->getNumOperators(); ++i)
+  {
+    Node ithOperator = termDatabase->getOperator(i);
+
+    const Kind kind = ithOperator.getKind();
+
+    bool relevant = true;
+
+    if (kind == Kind::APPLY_TESTER || kind == Kind::APPLY_SELECTOR
+        || termDatabase->getNumGroundTerms(ithOperator) == 0)
     {
-      skipOp = true;
+      relevant = false;
     }
-    else if (termDb->getNumGroundTerms(op) == 0)
+
+    if (relevant)
     {
-      skipOp = true;
-    }
-
-    // If `skipOp` is true we print that we're ignoring `op`.  Otherwise we
-    // print that we're considering `op`.
-
-    if (skipOp)
-    {
-    }
-    else
-    {
-      TNode groundTerm = termDb->getGroundTerm(op, 0);
-
-      d_symbolToKind[op] = groundTerm.getKind();
-
-      d_rlvFuncSyms.push_back(op);
+      result.push_back(ithOperator);
     }
   }
 
-  // We populate `d_rlvTypes`.
+  return result;
+}
 
-  for (std::vector<TNode>::iterator funcRef = d_rlvFuncSyms.begin();
-       funcRef != d_rlvFuncSyms.end();
-       ++funcRef)
+void EnumerativeConjectureGenerator::updateSymbolToKind(
+    TermDb* termDatabase,
+    const std::vector<Node>& functionSymbols,
+    std::unordered_map<Node, Kind>& symbolToKind)
+{
+  for (std::vector<Node>::const_iterator symbolRef = functionSymbols.begin();
+       symbolRef != functionSymbols.end();
+       ++symbolRef)
   {
-    TNode func = *funcRef;
-    TypeNode fullTyp = func.getType();
-    for (TypeNode::iterator typRef = fullTyp.begin(); typRef != fullTyp.end();
-         ++typRef)
-    {
-      TypeNode typ = *typRef;
-      if (!EnumerativeConjectureGenerator::member(d_rlvTypes, typ))
-      {
-        d_rlvTypes.push_back(typ);
-      }
-    }
+    Node symbol = *symbolRef;
+    Node groundTerm = termDatabase->getGroundTerm(symbol, 0);
+    symbolToKind[symbol] = groundTerm.getKind();
   }
+}
 
-  // We display `d_rlvTypes`.
+std::vector<TypeNode> EnumerativeConjectureGenerator::getRelevantTypes(
+    const std::vector<Node>& functionSymbols)
+{
+  std::unordered_set<TypeNode> types;
 
-  // ecg << "Relevant types are " << d_rlvTypes << std::endl;
-
-  // We create the grammar.
-
-  SkolemManager* skolemManager = d_nodeManager->getSkolemManager();
-
-  typedef std::vector<TypeNode>::iterator TypeRef;
-
-  for (TypeRef typeRef = d_rlvTypes.begin(); typeRef != d_rlvTypes.end();
-       ++typeRef)
+  for (std::vector<Node>::const_iterator symbolRef = functionSymbols.begin();
+       symbolRef != functionSymbols.end();
+       ++symbolRef)
   {
-    const TypeNode domainType = *typeRef;
+    Node symbol = *symbolRef;
 
-    if (!hasKey(d_typeToIn, domainType))
-    {
-      const TypeNode inType = d_nodeManager->mkFunctionType(domainType, d_rootType);
-      const Node inFunc = skolemManager->mkDummySkolem("in", inType);
-      d_typeToIn[domainType] = inFunc;
-    }
+    TypeNode symbolType = symbol.getType();
 
-    if (!hasKey(d_typeToNonTerminal, domainType))
-    {
-      const Node nonTerminal = NodeManager::mkBoundVar("nt", domainType);
-      d_typeToNonTerminal[domainType] = nonTerminal;
-    }
-
-    if (!hasKey(d_typeToVariables, domainType))
-    {
-      std::vector<Node> variables;
-
-      for (size_t i = 0; i < d_maximumSize - 1; ++i)
-      {
-        variables.push_back(d_termCanonize.getCanonicalFreeVar(domainType, i));
-      }
-
-      d_typeToVariables[domainType] = variables;
-    }
-  }
-
-  std::vector<Node> nonTerminals;
-
-  nonTerminals.push_back(d_rootNonTerminal);
-
-  for (TypeRef typeRef = d_rlvTypes.begin(); typeRef != d_rlvTypes.end();
-       ++typeRef)
-  {
-    nonTerminals.push_back(d_typeToNonTerminal[*typeRef]);
-  }
-
-  SygusGrammar grammar = SygusGrammar(std::vector<Node>{}, nonTerminals);
-
-  /* We add the rules to map terms of the relevant types into the type of the
-     root non-terminal. */
-
-  for (TypeRef typeRef = d_rlvTypes.begin(); typeRef != d_rlvTypes.end();
-       ++typeRef)
-  {
-    const TypeNode relevantType = *typeRef;
-    const Node nonTerminal = d_typeToNonTerminal[relevantType];
-    const Node inFunction = d_typeToIn[relevantType];
-    const Node rule =
-        d_nodeManager->mkNode(Kind::APPLY_UF, inFunction, nonTerminal);
-
-    // ecg << "We're going to add the rule " << rule << std::endl;
-
-    grammar.addRule(d_rootNonTerminal, rule);
-  }
-
-  /* We add rules corresponding to the relevant function symbols. */
-
-  typedef std::vector<TNode>::iterator TNodeRef;
-
-  for (TNodeRef tNodeRef = d_rlvFuncSyms.begin();
-       tNodeRef != d_rlvFuncSyms.end();
-       ++tNodeRef)
-  {
-    const TNode rlvFunc = *tNodeRef;
-
-    const TypeNode rlvFuncType = rlvFunc.getType();
-
-    std::vector<Node> application = {rlvFunc};
-
-    const TypeNode::iterator rangeRef = rlvFuncType.end() - 1;
-
-    for (TypeNode::iterator typeRef = rlvFuncType.begin(); typeRef != rangeRef;
+    for (TypeNode::const_iterator typeRef = symbolType.begin();
+         typeRef != symbolType.end();
          ++typeRef)
     {
-      application.push_back(d_typeToNonTerminal[*typeRef]);
+      types.insert(*typeRef);
     }
-
-    const Kind kind = d_symbolToKind[rlvFunc];
-
-    const Node rule = d_nodeManager->mkNode(kind, application);
-
-    // ecg << "We're going to add the rule " << rule << std::endl;
-
-    TNode nonTerminal = d_typeToNonTerminal[*rangeRef];
-
-    grammar.addRule(nonTerminal, rule);
   }
 
-  /* We add rules for the free variables. */
+  std::vector<TypeNode> result;
 
-  for (std::vector<TypeNode>::iterator typeRef = d_rlvTypes.begin();
-       typeRef != d_rlvTypes.end();
+  result.insert(result.end(), types.begin(), types.end());
+
+  return result;
+}
+
+void EnumerativeConjectureGenerator::updateTypeToIn(
+    NodeManager* nodeManagerPtr,
+    const std::vector<TypeNode>& types,
+    const TypeNode rootType,
+    std::unordered_map<TypeNode, Node>& typeToIn)
+{
+  SkolemManager* skolemManager = nodeManagerPtr->getSkolemManager();
+
+  for (std::vector<TypeNode>::const_iterator typeRef = types.begin();
+       typeRef != types.end();
        ++typeRef)
   {
-    const TypeNode type_ = *typeRef;
+    TypeNode type = *typeRef;
 
-    TNode nonTerminal = d_typeToNonTerminal[type_];
+    if (!hasKey(typeToIn, type))
+    {
+      const TypeNode injectorType =
+          nodeManagerPtr->mkFunctionType(type, rootType);
 
-    const std::vector<Node>& variables = d_typeToVariables[type_];
+      std::stringstream injectorNameStream;
+      injectorNameStream << "in" << type;
+      const std::string injectorName = injectorNameStream.str();
+
+      const Node injectorSymbol =
+          skolemManager->mkDummySkolem(injectorName, injectorType);
+
+      typeToIn[type] = injectorSymbol;
+    }
+  }
+}
+
+void EnumerativeConjectureGenerator::updateTypeToNonTerminal(
+    const std::vector<TypeNode>& types,
+    std::unordered_map<TypeNode, Node>& typeToNonTerminal)
+{
+  for (std::vector<TypeNode>::const_iterator typeRef = types.begin();
+       typeRef != types.end();
+       ++typeRef)
+  {
+    const TypeNode type = *typeRef;
+
+    if (!hasKey(typeToNonTerminal, type))
+    {
+      const std::string name = (std::stringstream() << "nt" << type).str();
+
+      const Node nonTerminal = NodeManager::mkBoundVar(name, type);
+
+      typeToNonTerminal[type] = nonTerminal;
+    }
+  }
+}
+
+void EnumerativeConjectureGenerator::updateTypeToVariables(
+    const std::vector<TypeNode>& types,
+    expr::TermCanonize& termCanonize,
+    const size_t maximumSize,
+    std::unordered_map<TypeNode, std::vector<Node>>& typeToVariables)
+{
+  for (std::vector<TypeNode>::const_iterator typeRef = types.begin();
+       typeRef != types.end();
+       ++typeRef)
+  {
+    const TypeNode type = *typeRef;
+
+    if (!hasKey(typeToVariables, type))
+    {
+      std::vector<Node>& variables = typeToVariables[type];
+
+      for (size_t i = 0; i < maximumSize; ++i)
+      {
+        variables.push_back(termCanonize.getCanonicalFreeVar(type, i));
+      }
+    }
+  }
+}
+
+std::vector<Node> EnumerativeConjectureGenerator::getNonTerminals(
+    const TNode rootNonTerminal,
+    const std::vector<TypeNode>& types,
+    const std::unordered_map<TypeNode, Node>& typeToNonTerminal)
+{
+  std::vector<Node> result = {rootNonTerminal};
+
+  for (std::vector<TypeNode>::const_iterator typeRef = types.begin();
+       typeRef != types.end();
+       ++typeRef)
+  {
+    result.push_back(typeToNonTerminal.at(*typeRef));
+  }
+
+  return result;
+}
+
+std::vector<std::pair<Node, Node>>
+EnumerativeConjectureGenerator::getInjectorRules(
+    NodeManager* nodeManagerPtr,
+    const TNode rootNonTerminal,
+    const std::vector<TypeNode>& types,
+    const std::unordered_map<TypeNode, Node>& typeToNonTerminal,
+    const std::unordered_map<TypeNode, Node>& typeToIn)
+{
+  std::vector<std::pair<Node, Node>> result;
+
+  for (std::vector<TypeNode>::const_iterator typeRef = types.begin();
+       typeRef != types.end();
+       ++typeRef)
+  {
+    const TypeNode type = *typeRef;
+
+    const Node nonTerminal = typeToNonTerminal.at(type);
+
+    const Node injector = typeToIn.at(type);
+
+    const Node rule = nodeManagerPtr->mkNode(
+        Kind::APPLY_UF, std::vector<Node>{injector, nonTerminal});
+
+    result.push_back(std::pair<Node, Node>{rootNonTerminal, rule});
+  }
+
+  return result;
+}
+
+std::vector<std::pair<Node, Node>>
+EnumerativeConjectureGenerator::getFunctionRules(
+    NodeManager* nodeManagerPtr,
+    const std::vector<Node>& functionSymbols,
+    const std::unordered_map<Node, Kind>& symbolToKind,
+    const std::unordered_map<TypeNode, Node>& typeToNonTerminal)
+{
+  std::vector<std::pair<Node, Node>> result;
+
+  for (std::vector<Node>::const_iterator symbolRef = functionSymbols.begin();
+       symbolRef != functionSymbols.end();
+       ++symbolRef)
+  {
+    const Node symbol = *symbolRef;
+
+    const TypeNode type = symbol.getType();
+
+    std::vector<Node> application = {symbol};
+
+    const TypeNode::const_iterator rangeTypeRef = type.end() - 1;
+
+    for (TypeNode::const_iterator domainTypeRef = type.begin();
+         domainTypeRef != rangeTypeRef;
+         ++domainTypeRef)
+    {
+      application.push_back(typeToNonTerminal.at(*domainTypeRef));
+    }
+
+    const Kind applicationKind = symbolToKind.at(symbol);
+
+    const Node nonTerminal = typeToNonTerminal.at(*rangeTypeRef);
+
+    const Node rule = nodeManagerPtr->mkNode(applicationKind, application);
+
+    result.push_back(std::pair<Node, Node>{nonTerminal, rule});
+  }
+
+  return result;
+}
+
+std::vector<std::pair<Node, Node>>
+EnumerativeConjectureGenerator::getVariableRules(
+    const std::vector<TypeNode>& types,
+    const std::unordered_map<TypeNode, Node>& typeToNonTerminal,
+    const std::unordered_map<TypeNode, std::vector<Node>> typeToVariables)
+{
+  std::vector<std::pair<Node, Node>> result;
+
+  for (std::vector<TypeNode>::const_iterator typeRef = types.begin();
+       typeRef != types.end();
+       ++typeRef)
+  {
+    const TypeNode type = *typeRef;
+
+    const Node nonTerminal = typeToNonTerminal.at(type);
+
+    const std::vector<Node>& variables = typeToVariables.at(type);
 
     for (std::vector<Node>::const_iterator variableRef = variables.begin();
          variableRef != variables.end();
          ++variableRef)
     {
-      grammar.addRule(nonTerminal, *variableRef);
+      result.push_back(std::pair<Node, Node>{nonTerminal, *variableRef});
     }
   }
 
-  /* We resolve the grammar. */
+  return result;
+}
+
+TypeNode EnumerativeConjectureGenerator::getGrammarType(
+    NodeManager* nodeManagerPtr,
+    const TNode rootNonTerminal,
+    const std::vector<Node>& functionSymbols,
+    const std::unordered_map<Node, Kind>& symbolToKind,
+    const std::vector<TypeNode>& types,
+    const std::unordered_map<TypeNode, Node>& typeToNonTerminal,
+    const std::unordered_map<TypeNode, Node>& typeToIn,
+    const std::unordered_map<TypeNode, std::vector<Node>>& typeToVariables)
+{
+  const std::vector<Node> nonTerminals =
+      getNonTerminals(rootNonTerminal, types, typeToNonTerminal);
+
+  SygusGrammar grammar(std::vector<Node>(), nonTerminals);
+
+  const std::vector<std::pair<Node, Node>> injectorRules = getInjectorRules(
+      nodeManagerPtr, rootNonTerminal, types, typeToNonTerminal, typeToIn);
+
+  const std::vector<std::pair<Node, Node>> functionRules = getFunctionRules(
+      nodeManagerPtr, functionSymbols, symbolToKind, typeToNonTerminal);
+
+  const std::vector<std::pair<Node, Node>> variableRules =
+      getVariableRules(types, typeToNonTerminal, typeToVariables);
+
+  std::vector<std::pair<Node, Node>> rules;
+  rules.insert(rules.end(), injectorRules.begin(), injectorRules.end());
+  rules.insert(rules.end(), functionRules.begin(), functionRules.end());
+  rules.insert(rules.end(), variableRules.begin(), variableRules.end());
+
+  for (std::vector<std::pair<Node, Node>>::const_iterator ruleRef =
+           rules.begin();
+       ruleRef != rules.end();
+       ++ruleRef)
+  {
+    const std::pair<Node, Node>& rule = *ruleRef;
+
+    grammar.addRule(std::get<0>(rule), std::get<1>(rule));
+  }
 
   const TypeNode grammarType = grammar.resolve();
 
-  // ecg << "Grammar is ";
-  // if (!grammar.isResolved())
-  // {
-  //   ecg << "not ";
-  // }
-  // ecg << "resolved" << std::endl;
+  return grammarType;
+}
 
-  /* We enumerate terms from the grammar. */
-
-  SygusTermEnumerator sygusTermEnumerator = SygusTermEnumerator(
-      d_env,
-      grammarType,
-      new EnumerativeConjectureGeneratorCallback(this, d_maximumSize - 1),
-      false,
-      0);
-
-  bool keepGoing = true;
+std::pair<std::vector<std::unordered_set<Node>>,
+          std::unordered_map<Node, Index>>
+EnumerativeConjectureGenerator::getEnumerationData(
+    SygusTermEnumerator& termEnumerator,
+    expr::TermCanonize& termCanonize,
+    const size_t maximumSize)
+{
+  CVC5_UNUSED std::ostream& out = Trace("enumerative-conjecture-generator");
 
   std::vector<std::unordered_set<Node>> sizeToCanonicals;
+  sizeToCanonicals.resize(maximumSize + 1);
 
-  sizeToCanonicals.resize(d_maximumSize + 1);
+  std::unordered_map<Node, Index> variableToIndex;
 
-  while (keepGoing)
+  Node term;
+
+  do
   {
-    const Node currentTerm = sygusTermEnumerator.getCurrent();
+    term = termEnumerator.getCurrent();
 
-    if (!currentTerm.isNull())
+    if (!term.isNull() && computeSize(term) <= maximumSize)
     {
-      if (underestimateSize(currentTerm) > d_maximumSize)
+      std::unordered_set<Node> variables;
+      expr::getSubtermsKind(Kind::BOUND_VARIABLE, term, variables);
+
+      std::unordered_set<Node> applications;
+      expr::getSubtermsKind(Kind::APPLY_UF, term[0], applications, false);
+
+      if (!variables.empty() && !applications.empty())
       {
-        keepGoing = false;
-      }
-      else
-      {
-        std::unordered_set<Node> boundVariableSet;
+        addTerm(termCanonize, term, variables, variableToIndex);
 
-        expr::getSubtermsKind(
-            Kind::BOUND_VARIABLE, currentTerm, boundVariableSet);
+        const Node canonical =
+            termCanonize.getCanonicalTerm(term, false, false);
 
-        std::unordered_set<Node> ufApplicationSet;
-
-        expr::getSubtermsKind(
-            Kind::APPLY_UF, currentTerm[0], ufApplicationSet, false);
-
-        if (!boundVariableSet.empty() && !ufApplicationSet.empty())
-        {
-          addTerm(currentTerm, boundVariableSet);
-
-          Node canonical =
-              d_termCanonize.getCanonicalTerm(currentTerm, false, false);
-
-          size_t size = computeSize(canonical);
-
-          std::unordered_set<Node>& canonicals = sizeToCanonicals[size];
-
-          canonicals.insert(canonical);
-        }
+        sizeToCanonicals[computeSize(canonical)].insert(canonical);
       }
     }
+  } while (underestimateSize(term) <= maximumSize
+           && termEnumerator.increment());
 
-    keepGoing = keepGoing && sygusTermEnumerator.increment();
-  }
+  return std::pair<std::vector<std::unordered_set<Node>>,
+                   std::unordered_map<Node, Index>>{sizeToCanonicals,
+                                                    variableToIndex};
+}
 
-  // debugPrintIndex(ecg);
+void EnumerativeConjectureGenerator::checkHelper()
+{
+  beginCallDebug();
 
-  // ecg << "Canonical terms:" << std::endl;
+  CVC5_UNUSED std::ostream& traceStream =
+      Trace("enumerative-conjecture-generator");
 
-  // for (size_t currentSize = 0; currentSize <= d_maximumSize; ++currentSize)
+  TermDb* termDatabase = getTermDatabase();
+
+  NodeManager* nodeManagerPtr = nodeManager();
+
+  d_relevantFunctionSymbols = getRelevantFunctionSymbols(termDatabase);
+
+  d_relevantTypes = getRelevantTypes(d_relevantFunctionSymbols);
+
+  updateSymbolToKind(termDatabase, d_relevantFunctionSymbols, d_symbolToKind);
+
+  updateTypeToIn(nodeManagerPtr, d_relevantTypes, d_rootType, d_typeToIn);
+
+  updateTypeToNonTerminal(d_relevantTypes, d_typeToNonTerminal);
+
+  updateTypeToVariables(
+      d_relevantTypes, d_termCanonize, d_maximumSize, d_typeToVariables);
+
+  const TypeNode grammarType = getGrammarType(nodeManagerPtr,
+                                              d_rootNonTerminal,
+                                              d_relevantFunctionSymbols,
+                                              d_symbolToKind,
+                                              d_relevantTypes,
+                                              d_typeToNonTerminal,
+                                              d_typeToIn,
+                                              d_typeToVariables);
+
+  SygusTermEnumerator sygusTermEnumerator =
+      SygusTermEnumerator(d_env, grammarType, nullptr, false, 0);
+
+  std::pair<std::vector<std::unordered_set<Node>>,
+            std::unordered_map<Node, Index>>
+      enumerationData = getEnumerationData(
+          sygusTermEnumerator, d_termCanonize, d_maximumSize);
+
+  CVC5_UNUSED std::vector<std::unordered_set<Node>>& sizeToCanonicals =
+      std::get<0>(enumerationData);
+
+  CVC5_UNUSED std::unordered_map<Node, Index>& variableToIndex =
+      std::get<1>(enumerationData);
+
+  debugPrintSizeToCanonicals(traceStream, d_maximumSize, sizeToCanonicals);
+
+  debugPrintIndex(traceStream, variableToIndex);
+
+  // traceStream << d_qstate.getEqualityEngine()->debugPrintEqc();
+
+  // TypeNode natType = findTypeByName("Nat");
+  // Assert(!natType.isNull());
+  // Node timesSymbol = findFunctionSymbolByName("times");
+  // Assert(!timesSymbol.isNull());
+  // Node n0Symbol = d_termCanonize.getCanonicalFreeVar(natType, 0);
+  // Node n1Symbol = d_termCanonize.getCanonicalFreeVar(natType, 1);
+  // Node pattern = nodeManager()->mkNode(
+  //     Kind::APPLY_UF, std::vector<Node>{timesSymbol, n0Symbol, n1Symbol});
+  // traceStream << "d_preferConstRepresentatives := "
+  //             << d_preferConstRepresentatives
+  //             << ", d_preferActiveTerms := " << d_preferActiveTerms <<
+  //             std::endl
+  //             << "Substitutions for " << pattern << " are:" << std::endl;
+  // std::vector<Subs> substitutions = findSubstitutions(
+  //     pattern, d_preferConstRepresentatives, d_preferActiveTerms);
+  // for (std::vector<Subs>::const_iterator substitutionRef =
+  //          substitutions.begin();
+  //      substitutionRef != substitutions.end();
+  //      ++substitutionRef)
   // {
-  //   ecg << "Size " << currentSize << std::endl;
-
-  //   const std::vector<Node>& canonicals = sizeToCanonicals[currentSize];
-
-  //   for (std::vector<Node>::const_iterator termRef = canonicals.begin();
-  //        termRef != canonicals.end();
-  //        ++termRef)
-  //   {
-  //     ecg << "Term " << *termRef << std::endl;
-  //   }
+  //   traceStream << *substitutionRef << std::endl;
   // }
 
-  std::unordered_set<Node>& canonicals3 = sizeToCanonicals[3];
+  // std::unordered_map<Node, std::vector<std::vector<Node>>>
+  //     canonicalToSizeToCandidates;
 
-  size_t fuel = 10;
+  // Count substitutions for each canonical term.
+  // for (size_t canonicalSize = 1; canonicalSize <= d_maximumSize;
+  //      ++canonicalSize)
+  // {
+  //   std::unordered_set<Node>& canonicals =
+  //   sizeToCanonicals[canonicalSize];
 
-  for (std::unordered_set<Node>::const_iterator termRef = canonicals3.begin();
-       termRef != canonicals3.end();
-       ++termRef)
-  {
-    if (fuel < 1)
-    {
-      break;
-    }
+  //   for (std::unordered_set<Node>::const_iterator canonicalRef =
+  //            canonicals.begin();
+  //        canonicalRef != canonicals.end();
+  //        ++canonicalRef)
+  //   {
+  //     TNode canonical = *canonicalRef;
 
-    std::vector<std::vector<Node>> sizeToCompatible = findCompatible(*termRef);
+  //     TNode pattern = canonical[0];
 
-    ecg << "RHS terms for LHS " << *termRef << std::endl;
+  //     std::vector<Subs> substitutions = findSubstitutions(
+  //         pattern, d_preferConstRepresentatives, d_preferActiveTerms);
 
-    for (size_t rhsSize = 0; rhsSize <= d_maximumSize; ++rhsSize)
-    {
-      std::vector<Node>& compatible = sizeToCompatible[rhsSize];
-
-      if (!compatible.empty())
-      {
-        ecg << "Terms with size " << rhsSize << std::endl;
-
-        for (std::vector<Node>::const_iterator rhsRef = compatible.begin();
-             rhsRef != compatible.end();
-             ++rhsRef)
-        {
-          ecg << "Term " << *rhsRef << std::endl;
-        }
-      }
-    }
-
-    --fuel;
-  }
-
-  std::unordered_map<Node, std::vector<Node>> canonicalToRhs;
+  //     ecg << "There are " << substitutions.size()
+  //         << " substitutions for the canonical term " << pattern
+  //         << std::endl;
+  //   }
+  // }
+  //
 
   endCallDebug();
+}
+
+void EnumerativeConjectureGenerator::check(CVC5_UNUSED Theory::Effort effort,
+                                           QEffort qEffort)
+{
+  updateClock(qEffort, d_clock, d_period);
+
+  if (d_clock == 0)
+  {
+    checkHelper();
+  }
 }
 
 size_t EnumerativeConjectureGenerator::underestimateSize(TNode n)
 {
   struct Job
   {
-    TNode d_out;
+    Node d_out;
   };
 
   std::vector<Job*> jobs = {new Job{n}};
 
-  size_t result = 1;
+  size_t result = 0;
 
   while (!jobs.empty())
   {
@@ -388,23 +576,26 @@ size_t EnumerativeConjectureGenerator::underestimateSize(TNode n)
 
     jobs.pop_back();
 
-    const TNode currentN = currentJob->d_out;
+    const Node currentN = currentJob->d_out;
 
-    const Kind nKind = currentN.getKind();
-
-    if (nKind == Kind::APPLY_CONSTRUCTOR || nKind == Kind::APPLY_UF)
+    if (!currentN.isNull())
     {
-      TNode::iterator childRef = currentN.begin();
+      const Kind nKind = currentN.getKind();
 
-      const TNode::iterator childRefMax = currentN.end();
-
-      if (childRef != childRefMax)
+      if (nKind == Kind::APPLY_CONSTRUCTOR || nKind == Kind::APPLY_UF)
       {
-        ++result;
+        Node::iterator childRef = currentN.begin();
 
-        for (; childRef != childRefMax; ++childRef)
+        const Node::iterator childRefMax = currentN.end();
+
+        if (childRef != childRefMax)
         {
-          jobs.push_back(new Job{*childRef});
+          ++result;
+
+          for (; childRef != childRefMax; ++childRef)
+          {
+            jobs.push_back(new Job{*childRef});
+          }
         }
       }
     }
@@ -419,46 +610,48 @@ size_t EnumerativeConjectureGenerator::computeSize(TNode n)
 {
   struct Job
   {
-    TNode d_out;
+    Node d_out;
   };
 
-  std::vector<Job*> jobs = {new Job{n}};
+  std::vector<Job*> jobs{new Job{n}};
 
   size_t result = 0;
 
-  std::unordered_set<TNode> seen;
+  std::unordered_set<Node> seen;
 
   while (!jobs.empty())
   {
-    const Job* currentJob = jobs.back();
+    const Job* job = jobs.back();
 
     jobs.pop_back();
 
-    const TNode currentN = currentJob->d_out;
+    const Node node = job->d_out;
 
-    const Kind nKind = currentN.getKind();
+    if (!node.isNull())
+    {
+      const Kind kind = node.getKind();
 
-    if (nKind == Kind::BOUND_VARIABLE && member(seen, currentN))
-    {
-      ++result;
-    }
-    else if (nKind == Kind::BOUND_VARIABLE)
-    {
-      seen.insert(currentN);
-    }
-    else if (nKind == Kind::APPLY_CONSTRUCTOR || nKind == Kind::APPLY_UF)
-    {
-      ++result;
-
-      for (TNode::iterator childRef = currentN.begin();
-           childRef != currentN.end();
-           ++childRef)
+      if (kind == Kind::BOUND_VARIABLE && member(seen, node))
       {
-        jobs.push_back(new Job{*childRef});
+        ++result;
+      }
+      else if (kind == Kind::BOUND_VARIABLE)
+      {
+        seen.insert(node);
+      }
+      else if (kind == Kind::APPLY_CONSTRUCTOR || kind == Kind::APPLY_UF)
+      {
+        ++result;
+
+        for (Node::iterator childPtr = node.begin(); childPtr != node.end();
+             ++childPtr)
+        {
+          jobs.emplace_back(new Job{*childPtr});
+        }
       }
     }
 
-    delete currentJob;
+    delete job;
   }
 
   return result;
@@ -478,21 +671,24 @@ EnumerativeConjectureGeneratorCallback::EnumerativeConjectureGeneratorCallback(
 bool EnumerativeConjectureGeneratorCallback::addTerm(const Node& sygusN,
                                                      std::unordered_set<Node>&)
 {
+  bool result = true;
+
   const Node n = datatypes::utils::sygusToBuiltin(sygusN);
 
   if (n.getType() != d_enumerativeConjectureGenerator->d_rootType
       && d_enumerativeConjectureGenerator->computeSize(n) > d_maximumSize)
   {
-    // Trace("enumerative-conjecture-generator") << "Reject " << n << std::endl;
-
-    return false;
+    result = false;
   }
 
-  return true;
+  return result;
 }
 
 void EnumerativeConjectureGenerator::addTerm(
-    Node term, std::unordered_set<Node>& boundVariableSet)
+    expr::TermCanonize& termCanonize,
+    const Node term,
+    const std::unordered_set<Node>& variableSet,
+    std::unordered_map<Node, Index>& rootVariableToIndex)
 {
   /* To implement this function we do the following:
    *
@@ -501,82 +697,96 @@ void EnumerativeConjectureGenerator::addTerm(
    * - go deeper in d_variableToIndex according to the sorted vector,
    * - when you're at the end of the vector add the term to d_terms.
    */
-  std::vector<Node> boundVariables;
-
-  boundVariables.insert(
-      boundVariables.end(), boundVariableSet.begin(), boundVariableSet.end());
+  std::vector<Node> variables;
+  variables.insert(variables.end(), variableSet.begin(), variableSet.end());
 
   std::sort(
-      boundVariables.begin(), boundVariables.end(), [this](Node n0, Node n1) {
-        return this->d_termCanonize.getIndexForFreeVariable(n0)
-               < this->d_termCanonize.getIndexForFreeVariable(n1);
+      variables.begin(), variables.end(), [termCanonize](TNode n0, TNode n1) {
+        return termCanonize.getIndexForFreeVariable(n0)
+               < termCanonize.getIndexForFreeVariable(n1);
       });
 
-  std::vector<Node>::const_iterator variableRef = boundVariables.begin();
+  std::vector<Node>::const_iterator variableRef = variables.begin();
 
-  Index* currentIndex = &d_variableToIndex[*variableRef];
+  Index* indexPtr = &rootVariableToIndex[*variableRef];
 
   ++variableRef;
 
-  for (; variableRef != boundVariables.end(); ++variableRef)
+  for (; variableRef != variables.end(); ++variableRef)
   {
-    currentIndex = &currentIndex->d_variableToIndex[*variableRef];
+    indexPtr = &(indexPtr->d_variableToIndex[*variableRef]);
   }
 
-  currentIndex->d_terms.push_back(term);
+  indexPtr->d_terms.push_back(term);
 }
 
-void EnumerativeConjectureGenerator::debugPrintIndex(std::ostream& out)
+void EnumerativeConjectureGenerator::debugPrintSizeToCanonicals(
+    std::ostream& out,
+    const size_t maximumSize,
+    const std::vector<std::unordered_set<Node>>& sizeToCanonicals)
+{
+  for (size_t size = 0; size <= maximumSize; ++size)
+  {
+    out << "Canonical terms sized " << size << ":" << std::endl;
+
+    const std::unordered_set<Node>& canonicals = sizeToCanonicals[size];
+    for (std::unordered_set<Node>::const_iterator termPtr = canonicals.begin();
+         termPtr != canonicals.end();
+         ++termPtr)
+    {
+      out << "- " << *termPtr << std::endl;
+    }
+  }
+}
+
+void EnumerativeConjectureGenerator::debugPrintIndex(
+    std::ostream& out,
+    const std::unordered_map<Node, Index>& rootVariableToIndex)
 {
   struct Job
   {
-    Index* d_index;
     std::vector<Node> d_path;
+    const Index* d_index;
   };
 
   std::vector<Job*> jobs;
 
-  for (std::map<Node, Index>::iterator entryRef = d_variableToIndex.begin();
-       entryRef != d_variableToIndex.end();
-       ++entryRef)
+  for (std::unordered_map<Node, Index>::const_iterator entryPtr =
+           rootVariableToIndex.begin();
+       entryPtr != rootVariableToIndex.end();
+       ++entryPtr)
   {
-    jobs.push_back(new Job{&std::get<1>(*entryRef),
-                           std::vector<Node>{std::get<0>(*entryRef)}});
+#define entry *entryPtr
+    jobs.emplace_back(
+        new Job{std::vector<Node>{std::get<0>(entry)}, &std::get<1>(entry)});
+#undef entry
   }
 
   while (!jobs.empty())
   {
     Job* job = jobs.back();
-
     jobs.pop_back();
 
-    Index* index = job->d_index;
-
-    std::vector<Node>& terms = index->d_terms;
-
     std::vector<Node>& path = job->d_path;
+    const Index* index = job->d_index;
+    const std::unordered_map<Node, Index>& variableToIndex =
+        index->d_variableToIndex;
 
-    out << "Path " << path << std::endl;
+    out << "Path " << path << ":" << std::endl;
+    out << "Terms " << index->d_terms << std::endl;
 
-    for (std::vector<Node>::iterator termRef = terms.begin();
-         termRef != terms.end();
-         ++termRef)
+    for (std::unordered_map<Node, Index>::const_iterator entryPtr =
+             variableToIndex.begin();
+         entryPtr != variableToIndex.end();
+         ++entryPtr)
     {
-      out << "Term " << *termRef << std::endl;
-    }
+#define entry *entryPtr
+      std::vector<Node> branchPath;
+      branchPath.insert(branchPath.end(), path.begin(), path.end());
+      branchPath.push_back(std::get<0>(entry));
 
-    for (std::map<Node, Index>::iterator entryRef =
-             index->d_variableToIndex.begin();
-         entryRef != index->d_variableToIndex.end();
-         ++entryRef)
-    {
-      std::vector<Node> newPath;
-
-      newPath.insert(newPath.end(), path.begin(), path.end());
-
-      newPath.push_back(std::get<0>(*entryRef));
-
-      jobs.push_back(new Job{&std::get<1>(*entryRef), newPath});
+      jobs.emplace_back(new Job{branchPath, &std::get<1>(entry)});
+#undef entry
     }
 
     delete job;
@@ -586,7 +796,7 @@ void EnumerativeConjectureGenerator::debugPrintIndex(std::ostream& out)
 std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
     TNode lhs)
 {
-  std::ostream& ecg = Trace("enumerative-conjecture-generator");
+  // std::ostream& ecg = Trace("enumerative-conjecture-generator");
 
   std::vector<std::vector<Node>> sizeToCompatible;
 
@@ -611,17 +821,22 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
   {
     size_t d_position;
     Index* d_index;
+    size_t d_skipped;
+    size_t d_difference;
   };
 
   std::vector<Job*> jobs;
 
   for (size_t position = 0; position < variableCount; ++position)
   {
-    TNode variable = variables[position];
+    Node variable = variables[position];
 
     if (hasKey(d_variableToIndex, variable))
     {
-      jobs.push_back(new Job{position + 1, &d_variableToIndex[variable]});
+      jobs.push_back(new Job{position + 1,
+                             &d_variableToIndex[variable],
+                             position,
+                             variableCount - 1});
     }
   }
 
@@ -632,31 +847,42 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
     jobs.pop_back();
 
     size_t jobPosition = job->d_position;
-
     Index* jobIndex = job->d_index;
+    size_t jobSkipped = job->d_skipped;
+    size_t jobDifference = job->d_difference;
 
-    std::vector<Node>& jobTerms = jobIndex->d_terms;
-
-    std::map<Node, Index>& jobVariableToIndex = jobIndex->d_variableToIndex;
-
-    for (std::vector<Node>::const_iterator termRef = jobTerms.begin();
-         termRef != jobTerms.end();
-         ++termRef)
+    if (jobSkipped <= d_maximumDifference)
     {
-      Node term = *termRef;
-
-      const size_t termSize = computeSize(term);
-
-      sizeToCompatible[termSize].push_back(term);
-    }
-
-    for (size_t position = jobPosition; position < variableCount; ++position)
-    {
-      TNode variable = variables[position];
-
-      if (hasKey(jobVariableToIndex, variable))
+      if (jobDifference <= d_maximumDifference)
       {
-        jobs.push_back(new Job{position + 1, &jobVariableToIndex[variable]});
+        std::vector<Node>& jobTerms = jobIndex->d_terms;
+
+        for (std::vector<Node>::const_iterator termRef = jobTerms.begin();
+             termRef != jobTerms.end();
+             ++termRef)
+        {
+          Node term = *termRef;
+
+          const size_t termSize = computeSize(term);
+
+          sizeToCompatible[termSize].push_back(term);
+        }
+      }
+
+      std::unordered_map<Node, Index>& jobVariableToIndex =
+          jobIndex->d_variableToIndex;
+
+      for (size_t position = jobPosition; position < variableCount; ++position)
+      {
+        Node variable = variables[position];
+
+        if (hasKey(jobVariableToIndex, variable))
+        {
+          jobs.push_back(new Job{position + 1,
+                                 &jobVariableToIndex[variable],
+                                 jobSkipped + position - jobPosition,
+                                 jobDifference - 1});
+        }
       }
     }
 
@@ -665,6 +891,347 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
 
   return sizeToCompatible;
 }
+
+std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
+    TNode canonical,
+    const bool preferConstRepresentatives,
+    const bool preferActiveTerms)
+{
+  std::vector<Subs> substitutions;
+
+  std::vector<Node> preferredRepresentatives;
+
+  TermDb* termDatabase = getTermDatabase();
+
+  eq::EqualityEngine* equalityEngine = d_qstate.getEqualityEngine();
+
+  for (eq::EqClassesIterator representativeRef =
+           eq::EqClassesIterator(equalityEngine);
+       !representativeRef.isFinished();
+       ++representativeRef)
+  {
+    Node representative = *representativeRef;
+
+    if (representative.getType() == canonical.getType())
+    {
+      // preferConstRepresentatives ==> representative.isConst()
+      if (!preferConstRepresentatives || representative.isConst())
+      {
+        preferredRepresentatives.push_back(representative);
+      }
+    }
+  }
+
+  for (std::vector<Node>::iterator representativeRef =
+           preferredRepresentatives.begin();
+       representativeRef != preferredRepresentatives.end();
+       ++representativeRef)
+  {
+    Node representative = *representativeRef;
+
+    Subs substitution;
+
+    Trail decisionQueue;
+
+    decisionQueue.emplace_back(new Decision(termDatabase,
+                                            equalityEngine,
+                                            canonical,
+                                            representative,
+                                            preferConstRepresentatives,
+                                            preferActiveTerms));
+
+    size_t decisionQueueFront = 0;
+
+    bool goOn = true;
+
+    while (goOn)
+    {
+      size_t decisionQueueBack = decisionQueue.size() - 1;
+
+      const bool decisionQueueEmpty = decisionQueueFront > decisionQueueBack;
+
+      if (decisionQueueEmpty)
+      {
+        substitutions.push_back(substitution);
+
+        if (decisionQueueFront > 0)
+        {
+          decisionQueueFront = decisionQueueBack;
+
+          decisionQueue[decisionQueueFront]->pop(substitution);
+        }
+        else
+        {
+          goOn = false;
+        }
+      }
+      else
+      {
+        Decision* decision = decisionQueue[decisionQueueFront];
+
+        if (decision->isFinished())
+        {
+          if (decisionQueueFront > 0)
+          {
+            for (size_t i = 0; i < decisionQueue.size() - decisionQueueFront;
+                 ++i)
+            {
+              Decision* decisionToDelete = decisionQueue.back();
+
+              decisionQueue.pop_back();
+
+              delete decisionToDelete;
+            }
+
+            --decisionQueueFront;
+
+            decisionQueue[decisionQueueFront]->pop(substitution);
+          }
+          else
+          {
+            goOn = false;
+          }
+        }
+        else if (decision->push(
+                     termDatabase, equalityEngine, substitution, decisionQueue))
+        {
+          ++decisionQueueFront;
+        }
+        else
+        {
+          decision->pop(substitution);
+        }
+      }
+    }
+  }
+
+  return substitutions;
+}
+
+TypeNode EnumerativeConjectureGenerator::findTypeByName(const std::string& name)
+{
+  TypeNode result = TypeNode::null();
+
+  std::vector<TypeNode>::const_iterator typeRef = std::find_if(
+      d_relevantTypes.begin(),
+      d_relevantTypes.end(),
+      [name](const TypeNode& type) {
+        const std::string typeName = (std::stringstream() << type).str();
+        const int result = typeName.compare(name);
+        return result == 0;
+      });
+
+  if (typeRef != d_relevantTypes.end())
+  {
+    result = *typeRef;
+  }
+
+  return result;
+}
+
+Node EnumerativeConjectureGenerator::findFunctionSymbolByName(
+    const std::string& name)
+{
+  Node result = Node::null();
+
+  std::vector<Node>::const_iterator functionSymbolRef =
+      std::find_if(d_relevantFunctionSymbols.begin(),
+                   d_relevantFunctionSymbols.end(),
+                   [name](TNode functionSymbol) {
+                     return functionSymbol.getName() == name;
+                   });
+
+  if (functionSymbolRef != d_relevantFunctionSymbols.end())
+  {
+    result = *functionSymbolRef;
+  }
+
+  return result;
+}
+
+Decision::Decision(TermDb* termDatabase,
+                   eq::EqualityEngine* equalityEngine,
+                   TNode pattern,
+                   TNode representative,
+                   bool preferConstRepresentatives,
+                   bool preferActiveTerms)
+{
+  d_pattern = pattern;
+  d_nextCandidatePosition = 0;
+  d_preferConstRepresentatives = preferConstRepresentatives;
+  d_preferActiveTerms = preferActiveTerms;
+
+  std::unordered_map<size_t, Node> positionToGround;
+
+  for (size_t position = 0; position < d_pattern.getNumChildren(); ++position)
+  {
+    Node child = d_pattern[position];
+
+    if (child.getKind() == Kind::BOUND_VARIABLE)
+    {
+      d_variablePositions.push_back(position);
+    }
+    else if (expr::hasBoundVar(child))
+    {
+      d_nonvariablePatternPositions.push_back(position);
+    }
+    else
+    {
+      if (equalityEngine->hasTerm(child))
+      {
+        positionToGround[position] = equalityEngine->getRepresentative(child);
+      }
+      else
+      {
+        positionToGround[position] = child;
+      }
+    }
+  }
+
+  Node patternHead = d_pattern.getOperator();
+
+  for (eq::EqClassIterator memberRef =
+           eq::EqClassIterator(representative, equalityEngine);
+       !memberRef.isFinished();
+       ++memberRef)
+  {
+    Node member = *memberRef;
+
+    bool addMemberToCandidates = true;
+
+    if (member.hasOperator() && member.getOperator() == patternHead
+        && (!d_preferActiveTerms || termDatabase->isTermActive(member)))
+    {
+      for (std::unordered_map<size_t, Node>::const_iterator entryRef =
+               positionToGround.begin();
+           entryRef != positionToGround.end();
+           ++entryRef)
+      {
+        const std::pair<size_t, Node>& entry = *entryRef;
+
+        TNode memberGroundChild = member[std::get<0>(entry)];
+
+        TNode patternGroundChild = std::get<1>(entry);
+
+        addMemberToCandidates =
+            addMemberToCandidates && memberGroundChild == patternGroundChild;
+      }
+    }
+    else
+    {
+      addMemberToCandidates = false;
+    }
+
+    if (addMemberToCandidates)
+    {
+      d_candidates.push_back(member);
+    }
+  }
+}
+
+Node Decision::getPattern() { return d_pattern; }
+
+bool Decision::push(TermDb* termDatabase,
+                    eq::EqualityEngine* equalityEngine,
+                    Subs& substitution,
+                    Trail& decisionQueue)
+{
+  if (isFinished())
+  {
+    return false;
+  }
+
+  Node candidate = d_candidates[d_nextCandidatePosition];
+
+  ++d_nextCandidatePosition;
+
+  std::vector<Node> representatives;
+
+  for (std::vector<size_t>::const_iterator positionRef =
+           d_variablePositions.begin();
+       positionRef != d_variablePositions.end();
+       ++positionRef)
+  {
+    size_t position = *positionRef;
+
+    Node variable = d_pattern[position];
+
+    Node desiredImage = candidate[position];
+
+    if (substitution.contains(variable))
+    {
+      Node image = substitution.getSubs(variable);
+
+      if (equalityEngine->areEqual(image, desiredImage))
+      {
+        continue;
+      }
+      else
+      {
+        return false;
+      }
+    }
+    else
+    {
+      substitution.add(variable, desiredImage);
+
+      d_boundPositions.insert(position);
+    }
+  }
+
+  for (std::vector<size_t>::const_iterator positionRef =
+           d_nonvariablePatternPositions.begin();
+       positionRef != d_nonvariablePatternPositions.end();
+       ++positionRef)
+  {
+    Node representative =
+        equalityEngine->getRepresentative(candidate[*positionRef]);
+
+    if (!d_preferConstRepresentatives || representative.isConst())
+    {
+      representatives.push_back(representative);
+    }
+    else
+    {
+      return false;
+    }
+  }
+
+  for (size_t i = 0; i < d_nonvariablePatternPositions.size(); ++i)
+  {
+    size_t childPosition = d_nonvariablePatternPositions[i];
+    Node childPattern = d_pattern[childPosition];
+    Node childRepresentative = representatives[i];
+
+    decisionQueue.emplace_back(new Decision(termDatabase,
+                                            equalityEngine,
+                                            childPattern,
+                                            childRepresentative,
+                                            d_preferConstRepresentatives,
+                                            d_preferActiveTerms));
+  }
+
+  return true;
+}
+
+void Decision::pop(Subs& substitution)
+{
+  for (std::unordered_set<size_t>::const_iterator boundPositionRef =
+           d_boundPositions.begin();
+       boundPositionRef != d_boundPositions.end();
+       ++boundPositionRef)
+  {
+    substitution.erase(d_pattern[*boundPositionRef]);
+  }
+
+  d_boundPositions.clear();
+}
+
+bool Decision::isFinished()
+{
+  return d_nextCandidatePosition >= d_candidates.size();
+}
+
 }  // namespace quantifiers
 }  // namespace theory
 }  // namespace cvc5::internal
