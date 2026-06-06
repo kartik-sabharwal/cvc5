@@ -134,6 +134,11 @@ void QuantifiersModules::initialize(Env& env,
     d_enumerativeConjectureGenerator.reset(new EnumerativeConjectureGenerator(env, qs, qim, qr, tr));
     modules.push_back(d_enumerativeConjectureGenerator.get());
   }
+  if (options.quantifiers.contextualEnumerator)
+  {
+    d_contextualEnumerator.reset(new ContextualEnumerator(env, qs, qim, qr, tr));
+    modules.push_back(d_contextualEnumerator.get());
+  }
 }
 
 }  // namespace quantifiers

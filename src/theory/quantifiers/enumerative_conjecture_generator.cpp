@@ -9,14 +9,13 @@
 #include "expr/skolem_manager.h"
 #include "expr/subs.h"
 #include "expr/sygus_grammar.h"
-#include "preprocessing/passes/synth_rew_rules.h"
 #include "theory/datatypes/sygus_datatype_utils.h"
 
 namespace cvc5::internal {
 namespace theory {
 namespace quantifiers {
-CVC5_UNUSED static std::ostream& operator<<(std::ostream& out,
-                                            std::vector<TypeNode>& vec)
+CVC5_UNUSED std::ostream& operator<<(std::ostream& out,
+                                     std::vector<TypeNode>& vec)
 {
   out << "{";
   std::vector<TypeNode>::iterator eltRef = vec.begin();
@@ -32,6 +31,18 @@ CVC5_UNUSED static std::ostream& operator<<(std::ostream& out,
   }
   out << "}";
   return out;
+}
+
+CVC5_UNUSED std::ostream& operator<<(std::ostream& out,
+                                     const Candidate& candidate)
+{
+  out << candidate.d_confirmed;
+  return out;
+}
+
+bool operator<(const Candidate& c0, const Candidate& c1)
+{
+  return c0.d_confirmed < c1.d_confirmed;
 }
 
 EnumerativeConjectureGenerator::EnumerativeConjectureGenerator(
@@ -77,6 +88,21 @@ void EnumerativeConjectureGenerator::updateClock(const QEffort qEffort,
   }
 }
 
+bool EnumerativeConjectureGenerator::isSymbolRelevant(const TermDb* termDb,
+                                                      const size_t i)
+{
+  TNode op = termDb->getOperator(i);
+
+  const Kind kind = op.getKind();
+
+  bool ctxtEnum = false;
+
+  op.getAttribute(CtxtEnumAttribute(), ctxtEnum);
+
+  return kind != Kind::APPLY_TESTER && kind != Kind::APPLY_SELECTOR
+         && termDb->getNumGroundTerms(op) > 0 && !ctxtEnum;
+}
+
 std::vector<Node> EnumerativeConjectureGenerator::getRelevantFunctionSymbols(
     TermDb* termDatabase)
 {
@@ -95,21 +121,9 @@ std::vector<Node> EnumerativeConjectureGenerator::getRelevantFunctionSymbols(
 
   for (size_t i = 0; i < termDatabase->getNumOperators(); ++i)
   {
-    Node ithOperator = termDatabase->getOperator(i);
-
-    const Kind kind = ithOperator.getKind();
-
-    bool relevant = true;
-
-    if (kind == Kind::APPLY_TESTER || kind == Kind::APPLY_SELECTOR
-        || termDatabase->getNumGroundTerms(ithOperator) == 0)
+    if (isSymbolRelevant(termDatabase, i))
     {
-      relevant = false;
-    }
-
-    if (relevant)
-    {
-      result.push_back(ithOperator);
+      result.push_back(termDatabase->getOperator(i));
     }
   }
 
@@ -440,6 +454,151 @@ EnumerativeConjectureGenerator::getEnumerationData(
                                                     variableToIndex};
 }
 
+std::unordered_map<Node, std::vector<Subs>>
+EnumerativeConjectureGenerator::getCanonicalToSubstitutions(
+    TermDb* termDatabase,
+    eq::EqualityEngine* equalityEngine,
+    const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
+    const bool preferConstRepresentatives,
+    const bool preferActiveTerms)
+{
+  typedef std::unordered_map<Node, std::vector<Subs>> Result;
+
+  Result result;
+
+  for (size_t size = 0; size < sizeToCanonicals.size(); ++size)
+  {
+    const std::unordered_set<Node>& canonicals = sizeToCanonicals[size];
+
+    typedef std::unordered_set<Node>::const_iterator NodePtr;
+
+    for (NodePtr canonicalPtr = canonicals.begin();
+         canonicalPtr != canonicals.end();
+         ++canonicalPtr)
+    {
+      TNode lhs = (*canonicalPtr)[0];
+
+      result[lhs] = findSubstitutions(termDatabase,
+                                      equalityEngine,
+                                      lhs,
+                                      preferConstRepresentatives,
+                                      preferActiveTerms);
+    }
+  }
+
+  return result;
+}
+
+void EnumerativeConjectureGenerator::debugPrintSizeToCompatibles(
+    std::ostream& out, TNode canonical, const Vector<Vector<Node>>& szToCompats)
+{
+  out << "LHS: " << canonical << std::endl;
+
+  for (size_t sz = 0; sz < szToCompats.size(); ++sz)
+  {
+    out << "- Size: " << sz << std::endl;
+
+    const Vector<Node>& compats = szToCompats[sz];
+
+    for (size_t i = 0; i < compats.size(); ++i)
+    {
+      out << "- RHS: " << compats[i] << std::endl;
+    }
+  }
+}
+
+CandidateIndex EnumerativeConjectureGenerator::getCandidateIndex(
+    const size_t maxSz,
+    const size_t maxDiff,
+    expr::TermCanonize& canonize,
+    EntailmentCheck* entChk,
+    eq::EqualityEngine* ee,
+    const std::vector<std::unordered_set<Node>>& szToCanons,
+    const std::unordered_map<Node, Index>& varToIdx,
+    const std::unordered_map<Node, std::vector<Subs>>& lhsToSubss)
+{
+  CVC5_UNUSED std::ostream& out = Trace("enumerative-conjecture-generator");
+
+  CandidateIndex result;
+  result.resize(2 * maxSz + 1);
+
+  for (size_t canonSz = 0; canonSz <= maxSz; ++canonSz)
+  {
+    const Set<Node>& canons = szToCanons[canonSz];
+
+    for (CIt<Set<Node>> canon = canons.begin(); canon != canons.end(); ++canon)
+    {
+      TNode lhs = (*canon)[0];
+
+      const Vector<Subs>& subss = lhsToSubss.at(lhs);
+
+      const Vector<Vector<Node>> szToCompats =
+          findCompatible(maxSz, maxDiff, varToIdx, canonize, *canon);
+
+      for (size_t compatSz = 0; compatSz <= maxSz; ++compatSz)
+      {
+        const size_t candSz = canonSz + compatSz;
+
+        PriorityQueue<Candidate>& cands = result[candSz];
+
+        const Vector<Node>& compats = szToCompats[compatSz];
+
+        for (CIt<Vector<Node>> compat = compats.begin();
+             compat != compats.end();
+             ++compat)
+        {
+          TNode rhs = (*compat)[0];
+
+          if (lhs != rhs)
+          {
+            const Score score = getScore(entChk, ee, lhs, rhs, subss);
+
+            const size_t tested = std::get<0>(score);
+
+            const size_t confirmed = std::get<1>(score);
+
+            if (tested > 0 && confirmed == tested)
+            {
+              cands.emplace(lhs, rhs, tested, confirmed);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScore(
+    EntailmentCheck* entChk,
+    const eq::EqualityEngine* ee,
+    TNode lhs,
+    TNode rhs,
+    const Vector<Subs>& subss)
+{
+  size_t tested = 0;
+  size_t confirmed = 0;
+
+  for (CIt<Vector<Subs>> subs = subss.begin(); subs != subss.end(); ++subs)
+  {
+    TNode concrLhs = entChk->getEntailedTerm(subs->apply(lhs));
+    TNode concrRhs = entChk->getEntailedTerm(subs->apply(rhs));
+
+    if (!concrLhs.isNull() && !concrRhs.isNull())
+    {
+      ++tested;
+
+      if (!ee->areDisequal(concrLhs, concrRhs, false))
+      {
+        ++confirmed;
+      }
+    }
+  }
+
+  return Score(tested, confirmed);
+}
+
 void EnumerativeConjectureGenerator::checkHelper()
 {
   beginCallDebug();
@@ -481,116 +640,88 @@ void EnumerativeConjectureGenerator::checkHelper()
       enumerationData = getEnumerationData(
           sygusTermEnumerator, d_termCanonize, d_maximumSize);
 
-  std::vector<std::unordered_set<Node>>& sizeToCanonicals = std::get<0>(enumerationData);
+  std::vector<std::unordered_set<Node>>& sizeToCanonicals =
+      std::get<0>(enumerationData);
 
   CVC5_UNUSED std::unordered_map<Node, Index>& variableToIndex =
       std::get<1>(enumerationData);
 
-  // debugPrintSizeToCanonicals(traceStream, d_maximumSize, sizeToCanonicals);
+  Map<Node, Vector<Subs>> lhsToSubss =
+      getCanonicalToSubstitutions(termDatabase,
+                                  getEqualityEngine(),
+                                  sizeToCanonicals,
+                                  d_preferConstRepresentatives,
+                                  d_preferActiveTerms);
 
-  // debugPrintIndex(traceStream, variableToIndex);
+  CandidateIndex candIdx = getCandidateIndex(d_maximumSize,
+                                             d_maximumDifference,
+                                             d_termCanonize,
+                                             d_treg.getEntailmentCheck(),
+                                             getEqualityEngine(),
+                                             sizeToCanonicals,
+                                             variableToIndex,
+                                             lhsToSubss);
 
-  debugPrintAllSubstitutions(traceStream,
-                             termDatabase,
-                             getEqualityEngine(),
-                             sizeToCanonicals,
-                             d_preferConstRepresentatives,
-                             d_preferActiveTerms);
-
-  // traceStream << d_qstate.getEqualityEngine()->debugPrintEqc();
-
-  // TypeNode natType = findTypeByName("Nat");
-  // Assert(!natType.isNull());
-  // Node timesSymbol = findFunctionSymbolByName("times");
-  // Assert(!timesSymbol.isNull());
-  // Node n0Symbol = d_termCanonize.getCanonicalFreeVar(natType, 0);
-  // Node n1Symbol = d_termCanonize.getCanonicalFreeVar(natType, 1);
-  // Node pattern = nodeManager()->mkNode(
-  //     Kind::APPLY_UF, std::vector<Node>{timesSymbol, n0Symbol, n1Symbol});
-  // traceStream << "d_preferConstRepresentatives := "
-  //             << d_preferConstRepresentatives
-  //             << ", d_preferActiveTerms := " << d_preferActiveTerms <<
-  //             std::endl
-  //             << "Substitutions for " << pattern << " are:" << std::endl;
-  // std::vector<Subs> substitutions = findSubstitutions(
-  //     pattern, d_preferConstRepresentatives, d_preferActiveTerms);
-  // for (std::vector<Subs>::const_iterator substitutionRef =
-  //          substitutions.begin();
-  //      substitutionRef != substitutions.end();
-  //      ++substitutionRef)
-  // {
-  //   traceStream << *substitutionRef << std::endl;
-  // }
-
-  // std::unordered_map<Node, std::vector<std::vector<Node>>>
-  //     canonicalToSizeToCandidates;
-
-  // Count substitutions for each canonical term.
-  // for (size_t canonicalSize = 1; canonicalSize <= d_maximumSize;
-  //      ++canonicalSize)
-  // {
-  //   std::unordered_set<Node>& canonicals =
-  //   sizeToCanonicals[canonicalSize];
-
-  //   for (std::unordered_set<Node>::const_iterator canonicalRef =
-  //            canonicals.begin();
-  //        canonicalRef != canonicals.end();
-  //        ++canonicalRef)
-  //   {
-  //     TNode canonical = *canonicalRef;
-
-  //     TNode pattern = canonical[0];
-
-  //     std::vector<Subs> substitutions = findSubstitutions(
-  //         pattern, d_preferConstRepresentatives, d_preferActiveTerms);
-
-  //     ecg << "There are " << substitutions.size()
-  //         << " substitutions for the canonical term " << pattern
-  //         << std::endl;
-  //   }
-  // }
-  //
+  debugPrintCandidateIndex(traceStream, candIdx);
 
   endCallDebug();
 }
 
-void EnumerativeConjectureGenerator::debugPrintAllSubstitutions(
+void EnumerativeConjectureGenerator::debugPrintLHSToSubstitutions(
     std::ostream& out,
-    TermDb* termDatabase,
-    eq::EqualityEngine* equalityEngine,
-    const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
-    const bool preferConstRepresentatives,
-    const bool preferActiveTerms)
+    const Vector<Set<Node>>& szToCanons,
+    const Map<Node, Vector<Subs>>& lhsToSubss)
 {
-  for (size_t size = 0; size < sizeToCanonicals.size(); ++size)
+  for (size_t sz = 0; sz < szToCanons.size(); ++sz)
   {
-    out << "Size " << size << ":" << std::endl;
+    out << "Size " << sz << ":" << std::endl;
 
-    const std::unordered_set<Node>& canonicals = sizeToCanonicals[size];
+    const Set<Node>& canons = szToCanons[sz];
 
-    typedef std::unordered_set<Node>::const_iterator NodePtr;
-
-    for (NodePtr canonicalPtr = canonicals.begin();
-         canonicalPtr != canonicals.end();
-         ++canonicalPtr)
+    for (CIt<Set<Node>> canon = canons.begin(); canon != canons.end(); ++canon)
     {
-      out << "- Canonical " << *canonicalPtr << std::endl;
+      TNode lhs = (*canon)[0];
 
-      std::vector<Subs> substitutions =
-          findSubstitutions(termDatabase,
-                            equalityEngine,
-                            canonicalPtr->operator[](0),
-                            preferConstRepresentatives,
-                            preferActiveTerms);
+      out << "- LHS " << lhs << ":" << std::endl;
 
-      typedef std::vector<Subs>::const_iterator SubsPtr;
-
-      for (SubsPtr sigmaPtr = substitutions.begin();
-           sigmaPtr != substitutions.end();
-           ++sigmaPtr)
+      if (hasKey(lhsToSubss, lhs))
       {
-        out << "-- Substitution " << *sigmaPtr << std::endl;
+        const Vector<Subs>& subss = lhsToSubss.at(lhs);
+
+        for (CIt<Vector<Subs>> subs = subss.begin(); subs != subss.end();
+             ++subs)
+        {
+          out << "-- Substitution " << *subs << std::endl;
+        }
       }
+      else
+      {
+        out << "...no substitutions found!" << std::endl;
+      }
+    }
+  }
+}
+
+void EnumerativeConjectureGenerator::debugPrintCandidateIndex(
+    std::ostream& out, const Vector<PriorityQueue<Candidate>>& candIdx)
+{
+  for (size_t candSz = 0; candSz < candIdx.size(); ++candSz)
+  {
+    out << "Candidate size " << candSz << ":" << std::endl;
+
+    // In theory this should copy the queue candIdx[candSz] to cands so we can
+    // freely remove elements from cands without modifying candIdx.
+    PriorityQueue<Candidate> cands = candIdx[candSz];
+
+    while (!cands.empty())
+    {
+      const Candidate& cand = cands.top();
+
+      out << "* " << cand.d_left << " = " << cand.d_right << ", "
+          << cand.d_confirmed << "/" << cand.d_tested << " confirmed"
+          << std::endl;
+
+      cands.pop();
     }
   }
 }
@@ -818,11 +949,126 @@ void EnumerativeConjectureGenerator::debugPrintIndex(
   }
 }
 
-std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
-    TNode lhs)
+bool EnumerativeConjectureGenerator::variableLessThan(
+    const expr::TermCanonize& termCanonize, TNode n0, TNode n1)
 {
-  // std::ostream& ecg = Trace("enumerative-conjecture-generator");
+  return termCanonize.getIndexForFreeVariable(n0)
+         < termCanonize.getIndexForFreeVariable(n1);
+}
 
+std::vector<Node> EnumerativeConjectureGenerator::getSortedVariables(
+    const expr::TermCanonize& termCanonize, TNode term)
+{
+  Set<Node> variables;
+
+  expr::getSubtermsKind(Kind::BOUND_VARIABLE, term, variables);
+
+  Vector<Node> result(variables.cbegin(), variables.cend());
+
+  std::sort(result.begin(), result.end(), [termCanonize](TNode n0, TNode n1) {
+    return variableLessThan(termCanonize, n0, n1);
+  });
+
+  return result;
+}
+
+std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
+    const size_t maximumSize,
+    const size_t maximumDifference,
+    const Map<Node, Index>& rootVariableToIndex,
+    expr::TermCanonize& termCanonize,
+    TNode canonical)
+{
+  Vector<Vector<Node>> result;
+
+  result.resize(maximumSize + 1);
+
+  const Vector<Node> variables = getSortedVariables(termCanonize, canonical);
+
+  const size_t nVariables = variables.size();
+
+  class Job
+  {
+   public:
+    size_t d_position;
+    Ref<const Index> d_index;
+    size_t d_skipped;
+    size_t d_difference;
+
+    Job(const size_t position,
+        const Index& index,
+        const size_t skipped,
+        const size_t difference)
+        : d_position(position),
+          d_index(std::cref(index)),
+          d_skipped(skipped),
+          d_difference(difference)
+    {
+    }
+  };
+
+  Vector<Ptr<Job>> jobs;
+
+  for (size_t position = 0; position < nVariables; ++position)
+  {
+    TNode variable = variables[position];
+
+    if (hasKey(rootVariableToIndex, variable))
+    {
+      jobs.emplace_back(new Job(position + 1,
+                                rootVariableToIndex.at(variable),
+                                position,
+                                nVariables - 1));
+    }
+  }
+
+  while (!jobs.empty())
+  {
+    Ptr<Job> job = std::move(jobs.back());
+
+    jobs.pop_back();
+
+    const size_t jPosition = job->d_position;
+    const Index& jIndex = job->d_index.get();
+    const size_t jSkipped = job->d_skipped;
+    const size_t jDifference = job->d_difference;
+
+    if (jDifference <= maximumDifference)
+    {
+      const Vector<Node>& jTerms = jIndex.d_terms;
+
+      for (CIt<Vector<Node>> jTerm = jTerms.begin(); jTerm != jTerms.end();
+           ++jTerm)
+      {
+        result[computeSize(*jTerm)].push_back(*jTerm);
+      }
+    }
+
+    if (jSkipped <= maximumDifference)
+    {
+      const Map<Node, Index>& jVarToIdx = jIndex.d_variableToIndex;
+
+      for (size_t position = jPosition; position < nVariables; ++position)
+      {
+        TNode variable = variables[position];
+
+        if (hasKey(jVarToIdx, variable))
+        {
+          jobs.emplace_back(new Job(position + 1,
+                                    jVarToIdx.at(variable),
+                                    jSkipped + (position - jPosition),
+                                    jDifference - 1));
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+std::vector<std::vector<Node>>
+EnumerativeConjectureGenerator::oldFindCompatible(TNode lhs)
+{
   std::vector<std::vector<Node>> sizeToCompatible;
 
   sizeToCompatible.resize(d_maximumSize + 1);
@@ -1010,7 +1256,7 @@ std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
         // virtualBegin > 0 because decisionQueue.size() > 0
 
         substitutions.push_back(substitution);
-        
+
         --virtualBegin;
 
         decisionQueue[virtualBegin]->pop(substitution);
@@ -1227,6 +1473,14 @@ void Decision::pop(Subs& substitution)
 bool Decision::isFinished()
 {
   return d_nextCandidatePosition >= d_candidates.size();
+}
+
+Candidate::Candidate(TNode left,
+                     TNode right,
+                     const size_t tested,
+                     const size_t confirmed)
+    : d_left(left), d_right(right), d_tested(tested), d_confirmed(confirmed)
+{
 }
 
 }  // namespace quantifiers

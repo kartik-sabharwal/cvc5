@@ -1328,6 +1328,8 @@ libcvc5_add_sources(
   theory/valuation.h
   theory/quantifiers/enumerative_conjecture_generator.h
   theory/quantifiers/enumerative_conjecture_generator.cpp
+  theory/quantifiers/contextual_enumerator.h
+  theory/quantifiers/contextual_enumerator.cpp
 )
 
 # suppress deprecated warnings to not error in CI

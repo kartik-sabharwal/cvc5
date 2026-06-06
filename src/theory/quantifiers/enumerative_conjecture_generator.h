@@ -13,11 +13,58 @@ namespace cvc5::internal {
 namespace theory {
 namespace quantifiers {
 
-class Index;
+class Index
+{
+ public:
+  std::vector<Node> d_terms;
+  std::unordered_map<Node, Index> d_variableToIndex;
+};
+
+class Candidate
+{
+ public:
+  Node d_left;
+  Node d_right;
+  size_t d_tested;
+  size_t d_confirmed;
+
+  Candidate(TNode left,
+            TNode right,
+            const size_t tested,
+            const size_t confirmed);
+};
+
+typedef std::vector<std::priority_queue<Candidate>> CandidateIndex;
 
 class EnumerativeConjectureGenerator : public QuantifiersModule
 {
  public:
+  template <class T>
+  using Vector = std::vector<T>;
+
+  template <class T>
+  using Set = std::unordered_set<T>;
+
+  template <class K, class V>
+  using Map = std::unordered_map<K, V>;
+
+  template <class T>
+  using CIt = typename T::const_iterator;
+
+  template <class T>
+  using Ref = std::reference_wrapper<T>;
+
+  template <class T>
+  using Ptr = std::unique_ptr<T>;
+
+  template <class T>
+  using Ptr = std::unique_ptr<T>;
+
+  template <class T>
+  using PriorityQueue = std::priority_queue<T>;
+
+  typedef std::pair<size_t, size_t> Score;
+
   // Functions
   EnumerativeConjectureGenerator(Env& env,
                                  QuantifiersState& qs,
@@ -82,9 +129,16 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
    * terms.  It returns a mapping from possible sizes of RHS terms to RHS
    * terms.
    */
-  std::vector<std::vector<Node>> findCompatible(TNode lhs);
+  std::vector<std::vector<Node>> oldFindCompatible(TNode lhs);
 
   // Functions, static
+
+  static std::vector<std::vector<Node>> findCompatible(
+      const size_t maximumSize,
+      const size_t maximumDifference,
+      const std::unordered_map<Node, Index>& variableToIndex,
+      expr::TermCanonize& termCanonize,
+      TNode canonical);
 
   /** Returns a vector of substitutions such that the image of 'canonical' under
    * each substitution is a member of some known equivalence class. */
@@ -218,20 +272,46 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   static Node findFunctionSymbolByName(const std::string& name,
                                        const std::vector<Node>& symbols);
 
-  static void debugPrintAllSubstitutions(
+  static void debugPrintLHSToSubstitutions(
       std::ostream& out,
+      const Vector<Set<Node>>& sizeToCanonicals,
+      const Map<Node, Vector<Subs>>& canonicalToSubstitutions);
+
+  static std::unordered_map<Node, std::vector<Subs>>
+  getCanonicalToSubstitutions(
       TermDb* termDatabase,
       eq::EqualityEngine* equalityEngine,
-      const std::vector<std::unordered_set<Node>>& sizeToCanonical,
+      const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
       const bool preferConstRepresentatives,
       const bool preferActiveTerms);
-};
 
-class Index
-{
- public:
-  std::vector<Node> d_terms;
-  std::unordered_map<Node, Index> d_variableToIndex;
+  static CandidateIndex getCandidateIndex(
+      const size_t maximumSize,
+      const size_t maximumDifference,
+      expr::TermCanonize& termCanonize,
+      EntailmentCheck* entailmentCheck,
+      eq::EqualityEngine* equalityEngine,
+      const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
+      const std::unordered_map<Node, Index>& variableToIndex,
+      const std::unordered_map<Node, std::vector<Subs>>&
+          canonicalToSubstitutions);
+
+  static std::pair<size_t, size_t> getScore(
+      EntailmentCheck* entailmentCheck,
+      const eq::EqualityEngine* equalityEngine,
+      TNode canonical,
+      TNode compatible,
+      const std::vector<Subs>& substitutions);
+
+  static Vector<Node> getSortedVariables(const expr::TermCanonize& termCanonize, TNode term);
+
+  static bool variableLessThan(const expr::TermCanonize& termCanonize, TNode n0, TNode n1);
+
+  static void debugPrintSizeToCompatibles(std::ostream& out, TNode canonical, const Vector<Vector<Node>>& szToCompats);
+
+  static bool isSymbolRelevant(const TermDb* termDb, const size_t i);
+
+  static void debugPrintCandidateIndex(std::ostream& out, const Vector<PriorityQueue<Candidate>>& candIdx);
 };
 
 class Decision;

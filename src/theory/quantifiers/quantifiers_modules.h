@@ -33,6 +33,7 @@
 #include "theory/quantifiers/sygus/synth_engine.h"
 #include "theory/quantifiers/sygus_inst.h"
 #include "theory/quantifiers/enumerative_conjecture_generator.h"
+#include "theory/quantifiers/contextual_enumerator.h"
 
 namespace cvc5::internal {
 namespace theory {
@@ -104,6 +105,8 @@ class QuantifiersModules
   std::unique_ptr<OracleEngine> d_oracleEngine;
   /** Enumerative conjecture (subgoal) generator */
   std::unique_ptr<EnumerativeConjectureGenerator> d_enumerativeConjectureGenerator;
+  /** Contextual term enumerator */
+  std::unique_ptr<ContextualEnumerator> d_contextualEnumerator;
 };
 
 }  // namespace quantifiers
