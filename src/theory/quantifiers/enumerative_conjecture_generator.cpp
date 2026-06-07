@@ -45,6 +45,18 @@ bool operator<(const Candidate& c0, const Candidate& c1)
   return c0.d_confirmed < c1.d_confirmed;
 }
 
+bool implies(const bool implicant, const std::function<bool()>& implicand)
+{
+  bool result = true;
+
+  if (implicant)
+  {
+    result = implicand();
+  }
+
+  return result;
+}
+
 EnumerativeConjectureGenerator::EnumerativeConjectureGenerator(
     Env& env,
     QuantifiersState& qs,
@@ -912,10 +924,8 @@ void EnumerativeConjectureGenerator::debugPrintIndex(
        entryPtr != rootVariableToIndex.end();
        ++entryPtr)
   {
-#define ENTRY *entryPtr
-    jobs.emplace_back(
-        new Job{std::vector<Node>{std::get<0>(ENTRY)}, &std::get<1>(ENTRY)});
-#undef ENTRY
+    jobs.emplace_back(new Job{std::vector<Node>{std::get<0>(*entryPtr)},
+                              &std::get<1>(*entryPtr)});
   }
 
   while (!jobs.empty())
@@ -936,13 +946,11 @@ void EnumerativeConjectureGenerator::debugPrintIndex(
          entryPtr != variableToIndex.end();
          ++entryPtr)
     {
-#define ENTRY *entryPtr
       std::vector<Node> branchPath;
       branchPath.insert(branchPath.end(), path.begin(), path.end());
-      branchPath.push_back(std::get<0>(ENTRY));
+      branchPath.push_back(std::get<0>(*entryPtr));
 
-      jobs.emplace_back(new Job{branchPath, &std::get<1>(ENTRY)});
-#undef ENTRY
+      jobs.emplace_back(new Job{branchPath, &std::get<1>(*entryPtr)});
     }
 
     delete job;
@@ -1210,35 +1218,38 @@ std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
     const bool preferConstRepresentatives,
     const bool preferActiveTerms)
 {
-#define IMPLIES(implicant, implicand) (!(implicant) || (implicand))
-
-  std::vector<Subs> substitutions;
-  std::vector<Node> preferredClasses;
-
-  typedef std::vector<Node>::const_iterator ReprPtr;
+  Vector<Subs> substitutions;
+  Vector<Node> preferredClasses;
 
   for (eq::EqClassesIterator reprPtr = eq::EqClassesIterator(equalityEngine);
        !reprPtr.isFinished();
        ++reprPtr)
   {
-    const Node repr = *reprPtr;
+    TNode repr = *reprPtr;
+
+    const std::function<bool()> reprIsConst = [repr]() {
+      return repr.isConst();
+    };
 
     if (repr.getType() == canonical.getType()
-        && IMPLIES(preferConstRepresentatives, repr.isConst()))
+        && implies(preferConstRepresentatives, reprIsConst))
     {
       preferredClasses.push_back(repr);
     }
   }
 
-  for (ReprPtr reprPtr = preferredClasses.begin();
+  for (CIt<Vector<Node>> reprPtr = preferredClasses.begin();
        reprPtr != preferredClasses.end();
        ++reprPtr)
   {
-    Trail decisionQueue;
+    TNode repr = *reprPtr;
+
+    Vector<Decision*> decisionQueue;
+
     decisionQueue.emplace_back(new Decision(termDatabase,
                                             equalityEngine,
                                             canonical,
-                                            *reprPtr,
+                                            repr,
                                             preferConstRepresentatives,
                                             preferActiveTerms));
 
@@ -1247,9 +1258,9 @@ std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
     Subs substitution;
 
     while (!decisionQueue.empty() && virtualBegin <= decisionQueue.size()
-           && IMPLIES(virtualBegin < decisionQueue.size()
+           && implies(virtualBegin < decisionQueue.size()
                           && decisionQueue[virtualBegin]->isFinished(),
-                      virtualBegin > 0))
+                      [virtualBegin]() { return virtualBegin > 0; }))
     {
       if (virtualBegin == decisionQueue.size())
       {
@@ -1289,7 +1300,6 @@ std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
   }
 
   return substitutions;
-#undef IMPLIES
 }
 
 Decision::Decision(TermDb* termDatabase,

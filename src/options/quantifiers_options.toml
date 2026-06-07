@@ -1979,6 +1979,14 @@ name   = "Quantifiers"
   help     = "should we prefer 'active' members of equivalence classes when searching for substitutions"
 
 [[option]]
+  name     = "ecgConjecturesPerRound"
+  category = "expert"
+  long     = "ecg-conjectures-per-round"
+  type     = "int64_t"
+  default  = "-1"
+  help     = "number of conjectures to generate per instantiation round, -1 for no limit"
+
+[[option]]
   name       = "contextualEnumerator"
   category   = "expert"
   long       = "ctx-enum"

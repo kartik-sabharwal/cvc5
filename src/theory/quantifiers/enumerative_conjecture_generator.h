@@ -80,8 +80,6 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   // Fields
   /** The sort of the root non-terminal. */
   TypeNode d_rootType;
-  /** The map from canonical variables to LHS/RHS terms. */
-  std::unordered_map<Node, Index> d_variableToIndex;
   /** The maximum size, "generalization depth", of an LHS/RHS term. */
   size_t d_maximumSize;
   /** See quantifiers_options.toml. */
@@ -91,23 +89,34 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   // Fields
   /** The collection of relevant function symbols.  We rebuild this each time
       `check()` is called. */
-  std::vector<Node> d_relevantFunctionSymbols;
+  Vector<Node> d_relevantFunctionSymbols;
   /** The collection of relevant types.  Each type is associated with a
       non-terminal in the grammar.  It is built from the domain and range types
       of the relevant function symbols. */
-  std::vector<TypeNode> d_relevantTypes;
+  Vector<TypeNode> d_relevantTypes;
+  /** Mapping from types to numbers so that the types can be ordered. */
+  Map<TypeNode, std::uint8_t> d_typeToNumber;
   /** Maps each relevant type to a function the type to the type of the root
    * non-terminal. */
-  std::unordered_map<TypeNode, Node> d_typeToIn;
+  Map<TypeNode, Node> d_typeToIn;
   /** Maps each relevant type to a bound variable that represents its
-      non-terminal in the grammar. */
-  std::unordered_map<TypeNode, Node> d_typeToNonTerminal;
+   * non-terminal in the grammar. */
+  Map<TypeNode, Node> d_typeToNonTerminal;
   /** Maps function and constructor symbols to the kinds of their applcations.
       Every function symbol is mapped to APPLY_UF and every constructor symbol
       is mapped to APPLY_CONSTRUCTOR. */
-  std::unordered_map<Node, Kind> d_symbolToKind;
+  Map<Node, Kind> d_symbolToKind;
   /** Maps each relevant type to a list of "free" variables of that type. */
-  std::unordered_map<TypeNode, std::vector<Node>> d_typeToVariables;
+  Map<TypeNode, std::vector<Node>> d_typeToVariables;
+  /** Maps each size from 0 to d_maximumSize to a set of canonical (LHS) terms. */
+  Vector<Set<Node>> d_sizeToCanonicals;
+  /** Maps each canonical variable to a trie of terms generated from the grammar. */
+  Map<Node, Index> d_variableToIndex;
+  /** Conjectures that have been promoted to theorems because we were able to prove them using induction. */
+  Set<Node> d_inductivelyEntailed;
+  /** Conjectures that have been promoted to theorems because we were able to prove them without induction. */
+  Set<Node> d_deductivelyEntailed;
+
   /** Term canonization utility. */
   expr::TermCanonize d_termCanonize;
   /** Pointer to the current node manager. */
