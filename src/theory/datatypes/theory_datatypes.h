@@ -260,7 +260,7 @@ class TheoryDatatypes : public Theory
    * currently in the equality engine. If so, we add pending lemmas on the
    * inference manager.
    */
-  void checkSplit();
+  void checkSplit(bool lastCall);
   /** for checking whether two codatatype terms must be equal */
   void separateBisimilar(std::vector<Node>& part,
                          std::vector<std::vector<Node> >& part_out,
@@ -310,6 +310,10 @@ class TheoryDatatypes : public Theory
   DatatypesProofRuleChecker d_checker;
   /** The care pair argument callback, used for theory combination */
   CarePairArgumentCallback d_cpacb;
+  bool d_eagerSplitFull;
+  uint64_t d_eagerSplitFullCounter;
+  uint64_t d_eagerSplitFullPeriod;
+  bool d_eagerSplitLastCall;
 }; /* class TheoryDatatypes */
 
 }  // namespace datatypes

@@ -63,7 +63,10 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   template <class T>
   using PriorityQueue = std::priority_queue<T>;
 
-  typedef std::pair<size_t, size_t> Score;
+  template <class T, class U>
+  using Pair = std::pair<T, U>;
+
+  typedef Pair<size_t, size_t> Score;
 
   // Functions
   EnumerativeConjectureGenerator(Env& env,
@@ -108,13 +111,17 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   Map<Node, Kind> d_symbolToKind;
   /** Maps each relevant type to a list of "free" variables of that type. */
   Map<TypeNode, std::vector<Node>> d_typeToVariables;
-  /** Maps each size from 0 to d_maximumSize to a set of canonical (LHS) terms. */
+  /** Maps each size from 0 to d_maximumSize to a set of canonical (LHS) terms.
+   */
   Vector<Set<Node>> d_sizeToCanonicals;
-  /** Maps each canonical variable to a trie of terms generated from the grammar. */
+  /** Maps each canonical variable to a trie of terms generated from the
+   * grammar. */
   Map<Node, Index> d_variableToIndex;
-  /** Conjectures that have been promoted to theorems because we were able to prove them using induction. */
+  /** Conjectures that have been promoted to theorems because we were able to
+   * prove them using induction. */
   Set<Node> d_inductivelyEntailed;
-  /** Conjectures that have been promoted to theorems because we were able to prove them without induction. */
+  /** Conjectures that have been promoted to theorems because we were able to
+   * prove them without induction. */
   Set<Node> d_deductivelyEntailed;
 
   /** Term canonization utility. */
@@ -145,8 +152,9 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   static std::vector<std::vector<Node>> findCompatible(
       const size_t maximumSize,
       const size_t maximumDifference,
-      const std::unordered_map<Node, Index>& variableToIndex,
+      const Map<Node, Index>& variableToIndex,
       expr::TermCanonize& termCanonize,
+      const Map<TypeNode, std::uint8_t>& typeToNumber,
       TNode canonical);
 
   /** Returns a vector of substitutions such that the image of 'canonical' under
@@ -191,9 +199,9 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   }
 
   static void addTerm(expr::TermCanonize& termCanonize,
+                      const Map<TypeNode, std::uint8_t>& typeToNumber,
                       const Node term,
-                      const std::unordered_set<Node>& variableSet,
-                      std::unordered_map<Node, Index>& variableToIndex);
+                      Map<Node, Index>& variableToIndex);
 
   static void debugPrintIndex(
       std::ostream& out,
@@ -269,6 +277,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
                    std::unordered_map<Node, Index>>
   getEnumerationData(SygusTermEnumerator& termEnumerator,
                      expr::TermCanonize& termCanonize,
+                     const Map<TypeNode, std::uint8_t>& typeToNumber,
                      const size_t maximumSize);
 
   static size_t computeSize(TNode n);
@@ -302,6 +311,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       eq::EqualityEngine* equalityEngine,
       const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
       const std::unordered_map<Node, Index>& variableToIndex,
+      const Map<TypeNode, std::uint8_t>& typeToNumber,
       const std::unordered_map<Node, std::vector<Subs>>&
           canonicalToSubstitutions);
 
@@ -312,15 +322,30 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       TNode compatible,
       const std::vector<Subs>& substitutions);
 
-  static Vector<Node> getSortedVariables(const expr::TermCanonize& termCanonize, TNode term);
+  static Vector<Node> getSortedVariables(
+      const expr::TermCanonize& termCanonize,
+      const Map<TypeNode, std::uint8_t>& typeToNumber,
+      TNode term);
 
-  static bool variableLessThan(const expr::TermCanonize& termCanonize, TNode n0, TNode n1);
+  static bool variableLessThan(const expr::TermCanonize& termCanonize,
+                               const Map<TypeNode, std::uint8_t>& typeToNumber,
+                               TNode n0,
+                               TNode n1);
 
-  static void debugPrintSizeToCompatibles(std::ostream& out, TNode canonical, const Vector<Vector<Node>>& szToCompats);
+  static void debugPrintSizeToCompatibles(
+      std::ostream& out,
+      TNode canonical,
+      const Vector<Vector<Node>>& szToCompats);
 
   static bool isSymbolRelevant(const TermDb* termDb, const size_t i);
 
-  static void debugPrintCandidateIndex(std::ostream& out, const Vector<PriorityQueue<Candidate>>& candIdx);
+  static void debugPrintCandidateIndex(
+      std::ostream& out, const Vector<PriorityQueue<Candidate>>& candIdx);
+
+  static bool areSame(const Vector<Node>& v, const Vector<Node>& w);
+
+  static void updateTypeToNumber(const Vector<TypeNode>& types,
+                                 Map<TypeNode, std::uint8_t>& typeToNum);
 };
 
 class Decision;

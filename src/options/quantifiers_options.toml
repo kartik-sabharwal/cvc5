@@ -1981,7 +1981,7 @@ name   = "Quantifiers"
 [[option]]
   name     = "ecgConjecturesPerRound"
   category = "expert"
-  long     = "ecg-conjectures-per-round"
+  long     = "ecg-conjectures-per-round=N"
   type     = "int64_t"
   default  = "-1"
   help     = "number of conjectures to generate per instantiation round, -1 for no limit"

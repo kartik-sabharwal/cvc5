@@ -70,6 +70,19 @@ TheoryDatatypes::TheoryDatatypes(Env& env,
   // indicate we are using the default theory state object
   d_theoryState = &d_state;
   d_inferManager = &d_im;
+
+  const int64_t eagerSplitFull = options().datatypes.dtEagerSplitFull;
+  d_eagerSplitFull = (eagerSplitFull != -1);
+  d_eagerSplitLastCall = options().datatypes.dtEagerSplitLastCall;
+  d_eagerSplitFullCounter = 0;
+  if (d_eagerSplitFull)
+  {
+    d_eagerSplitFullPeriod = eagerSplitFull;
+  }
+  else
+  {
+    d_eagerSplitFullPeriod = 1;
+  }
 }
 
 TheoryDatatypes::~TheoryDatatypes()
@@ -210,8 +223,12 @@ void TheoryDatatypes::postCheck(Effort level)
   d_im.process();
   if (level == EFFORT_LAST_CALL)
   {
-    Assert(d_sygusExtension != nullptr);
-    d_sygusExtension->check();
+    checkSplit(true);
+
+    if (d_sygusExtension != nullptr)
+    {
+      d_sygusExtension->check();
+    }
   }
   else if (level == EFFORT_FULL && !d_state.isInConflict()
            && !d_im.hasSentLemma() && !d_valuation.needCheck())
@@ -236,7 +253,7 @@ void TheoryDatatypes::postCheck(Effort level)
       d_im.reset();
       Trace("datatypes-check") << "Check for splits " << endl;
       // check for splits
-      checkSplit();
+      checkSplit(false);
       if (d_im.hasSentLemma())
       {
         // clear pending facts: we added a lemma, so internal inferences are
@@ -266,10 +283,7 @@ void TheoryDatatypes::postCheck(Effort level)
   Trace("datatypes") << "TheoryDatatypes::check(): done" << std::endl;
 }
 
-bool TheoryDatatypes::needsCheckLastEffort()
-{
-  return d_sygusExtension != nullptr;
-}
+bool TheoryDatatypes::needsCheckLastEffort() { return true; }
 
 void TheoryDatatypes::notifyFact(TNode atom,
                                  bool polarity,
@@ -1778,8 +1792,16 @@ Node TheoryDatatypes::searchForCycle(TNode n,
   }
 }
 
-void TheoryDatatypes::checkSplit()
+void TheoryDatatypes::checkSplit(bool lastCall)
 {
+  const uint64_t eagerSplitFullCounter = d_eagerSplitFullCounter;
+
+  if (d_eagerSplitFull && !lastCall)
+  {
+    ++d_eagerSplitFullCounter;
+    d_eagerSplitFullCounter = d_eagerSplitFullCounter % d_eagerSplitFullPeriod;
+  }
+
   // get the relevant term set, currently all datatype equivalence classes
   // in the equality engine
   std::set<Node> termSetReps;
@@ -1906,10 +1928,19 @@ void TheoryDatatypes::checkSplit()
       Trace("datatypes-debug") << "...returned " << ifin << std::endl;
       if (!ifin)
       {
-        if (!eqc || !eqc->d_selectors)
+        if (d_eagerSplitLastCall && lastCall)
         {
-          needSplit = false;
-          break;
+        }
+        else if (d_eagerSplitFull && eagerSplitFullCounter == 0)
+        {
+        }
+        else
+        {
+          if (!eqc || !eqc->d_selectors)
+          {
+            needSplit = false;
+            break;
+          }
         }
       }
       else if (fconsIndex == -1)

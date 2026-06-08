@@ -425,6 +425,7 @@ std::pair<std::vector<std::unordered_set<Node>>,
 EnumerativeConjectureGenerator::getEnumerationData(
     SygusTermEnumerator& termEnumerator,
     expr::TermCanonize& termCanonize,
+    const Map<TypeNode, std::uint8_t>& typeToNumber,
     const size_t maximumSize)
 {
   CVC5_UNUSED std::ostream& out = Trace("enumerative-conjecture-generator");
@@ -450,7 +451,7 @@ EnumerativeConjectureGenerator::getEnumerationData(
 
       if (!variables.empty() && !applications.empty())
       {
-        addTerm(termCanonize, term, variables, variableToIndex);
+        addTerm(termCanonize, typeToNumber, term, variableToIndex);
 
         const Node canonical =
             termCanonize.getCanonicalTerm(term, false, false);
@@ -525,9 +526,10 @@ CandidateIndex EnumerativeConjectureGenerator::getCandidateIndex(
     expr::TermCanonize& canonize,
     EntailmentCheck* entChk,
     eq::EqualityEngine* ee,
-    const std::vector<std::unordered_set<Node>>& szToCanons,
-    const std::unordered_map<Node, Index>& varToIdx,
-    const std::unordered_map<Node, std::vector<Subs>>& lhsToSubss)
+    const Vector<Set<Node>>& szToCanons,
+    const Map<Node, Index>& varToIdx,
+    const Map<TypeNode, std::uint8_t>& typeToNumber,
+    const Map<Node, Vector<Subs>>& lhsToSubss)
 {
   CVC5_UNUSED std::ostream& out = Trace("enumerative-conjecture-generator");
 
@@ -544,8 +546,8 @@ CandidateIndex EnumerativeConjectureGenerator::getCandidateIndex(
 
       const Vector<Subs>& subss = lhsToSubss.at(lhs);
 
-      const Vector<Vector<Node>> szToCompats =
-          findCompatible(maxSz, maxDiff, varToIdx, canonize, *canon);
+      const Vector<Vector<Node>> szToCompats = findCompatible(
+          maxSz, maxDiff, varToIdx, canonize, typeToNumber, *canon);
 
       for (size_t compatSz = 0; compatSz <= maxSz; ++compatSz)
       {
@@ -611,6 +613,35 @@ std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScore(
   return Score(tested, confirmed);
 }
 
+bool EnumerativeConjectureGenerator::areSame(const Vector<Node>& v,
+                                             const Vector<Node>& w)
+{
+  bool result = v.size() == w.size();
+
+  CIt<Vector<Node>> sym = v.begin();
+
+  while (result && sym != v.end())
+  {
+    result = member(w, *sym);
+
+    ++sym;
+  }
+
+  return result;
+}
+
+void EnumerativeConjectureGenerator::updateTypeToNumber(
+    const Vector<TypeNode>& types, Map<TypeNode, std::uint8_t>& typeToNum)
+{
+  for (CIt<Vector<TypeNode>> type = types.begin(); type != types.end(); ++type)
+  {
+    if (!hasKey(typeToNum, *type))
+    {
+      typeToNum[*type] = typeToNum.size();
+    }
+  }
+}
+
 void EnumerativeConjectureGenerator::checkHelper()
 {
   beginCallDebug();
@@ -620,48 +651,54 @@ void EnumerativeConjectureGenerator::checkHelper()
 
   TermDb* termDatabase = getTermDatabase();
 
-  NodeManager* nodeManagerPtr = nodeManager();
+  NodeManager* nodeMgr = nodeManager();
 
-  d_relevantFunctionSymbols = getRelevantFunctionSymbols(termDatabase);
+  Vector<Node> rlvFuncSyms = getRelevantFunctionSymbols(termDatabase);
 
-  d_relevantTypes = getRelevantTypes(d_relevantFunctionSymbols);
+  if (!areSame(d_relevantFunctionSymbols, rlvFuncSyms))
+  {
+    traceStream << "Relevant functions have changed!" << std::endl;
 
-  updateSymbolToKind(termDatabase, d_relevantFunctionSymbols, d_symbolToKind);
+    d_relevantFunctionSymbols = rlvFuncSyms;
 
-  updateTypeToIn(nodeManagerPtr, d_relevantTypes, d_rootType, d_typeToIn);
+    d_relevantTypes = getRelevantTypes(d_relevantFunctionSymbols);
 
-  updateTypeToNonTerminal(d_relevantTypes, d_typeToNonTerminal);
+    updateSymbolToKind(termDatabase, d_relevantFunctionSymbols, d_symbolToKind);
 
-  updateTypeToVariables(
-      d_relevantTypes, d_termCanonize, d_maximumSize, d_typeToVariables);
+    updateTypeToNumber(d_relevantTypes, d_typeToNumber);
 
-  const TypeNode grammarType = getGrammarType(nodeManagerPtr,
-                                              d_rootNonTerminal,
-                                              d_relevantFunctionSymbols,
-                                              d_symbolToKind,
-                                              d_relevantTypes,
-                                              d_typeToNonTerminal,
-                                              d_typeToIn,
-                                              d_typeToVariables);
+    updateTypeToIn(nodeMgr, d_relevantTypes, d_rootType, d_typeToIn);
 
-  SygusTermEnumerator sygusTermEnumerator =
-      SygusTermEnumerator(d_env, grammarType, nullptr, false, 0);
+    updateTypeToNonTerminal(d_relevantTypes, d_typeToNonTerminal);
 
-  std::pair<std::vector<std::unordered_set<Node>>,
-            std::unordered_map<Node, Index>>
-      enumerationData = getEnumerationData(
-          sygusTermEnumerator, d_termCanonize, d_maximumSize);
+    updateTypeToVariables(
+        d_relevantTypes, d_termCanonize, d_maximumSize, d_typeToVariables);
 
-  std::vector<std::unordered_set<Node>>& sizeToCanonicals =
-      std::get<0>(enumerationData);
+    const TypeNode grammarType = getGrammarType(nodeMgr,
+                                                d_rootNonTerminal,
+                                                d_relevantFunctionSymbols,
+                                                d_symbolToKind,
+                                                d_relevantTypes,
+                                                d_typeToNonTerminal,
+                                                d_typeToIn,
+                                                d_typeToVariables);
 
-  CVC5_UNUSED std::unordered_map<Node, Index>& variableToIndex =
-      std::get<1>(enumerationData);
+    SygusTermEnumerator sygusTermEnumerator =
+        SygusTermEnumerator(d_env, grammarType, nullptr, false, 0);
 
-  Map<Node, Vector<Subs>> lhsToSubss =
+    Pair<Vector<Set<Node>>, Map<Node, Index>> enumerationData =
+        getEnumerationData(
+            sygusTermEnumerator, d_termCanonize, d_typeToNumber, d_maximumSize);
+
+    d_sizeToCanonicals = std::get<0>(enumerationData);
+
+    d_variableToIndex = std::get<1>(enumerationData);
+  }
+
+  const Map<Node, Vector<Subs>> lhsToSubss =
       getCanonicalToSubstitutions(termDatabase,
                                   getEqualityEngine(),
-                                  sizeToCanonicals,
+                                  d_sizeToCanonicals,
                                   d_preferConstRepresentatives,
                                   d_preferActiveTerms);
 
@@ -670,8 +707,9 @@ void EnumerativeConjectureGenerator::checkHelper()
                                              d_termCanonize,
                                              d_treg.getEntailmentCheck(),
                                              getEqualityEngine(),
-                                             sizeToCanonicals,
-                                             variableToIndex,
+                                             d_sizeToCanonicals,
+                                             d_variableToIndex,
+                                             d_typeToNumber,
                                              lhsToSubss);
 
   debugPrintCandidateIndex(traceStream, candIdx);
@@ -854,9 +892,9 @@ std::string EnumerativeConjectureGenerator::identify() const
 
 void EnumerativeConjectureGenerator::addTerm(
     expr::TermCanonize& termCanonize,
+    const Map<TypeNode, std::uint8_t>& typeToNumber,
     const Node term,
-    const std::unordered_set<Node>& variableSet,
-    std::unordered_map<Node, Index>& rootVariableToIndex)
+    Map<Node, Index>& rootVariableToIndex)
 {
   /* To implement this function we do the following:
    *
@@ -865,16 +903,9 @@ void EnumerativeConjectureGenerator::addTerm(
    * - go deeper in d_variableToIndex according to the sorted vector,
    * - when you're at the end of the vector add the term to d_terms.
    */
-  std::vector<Node> variables;
-  variables.insert(variables.end(), variableSet.begin(), variableSet.end());
+  Vector<Node> variables = getSortedVariables(termCanonize, typeToNumber, term);
 
-  std::sort(
-      variables.begin(), variables.end(), [termCanonize](TNode n0, TNode n1) {
-        return termCanonize.getIndexForFreeVariable(n0)
-               < termCanonize.getIndexForFreeVariable(n1);
-      });
-
-  std::vector<Node>::const_iterator variableRef = variables.begin();
+  CIt<Vector<Node>> variableRef = variables.begin();
 
   Index* indexPtr = &rootVariableToIndex[*variableRef];
 
@@ -958,14 +989,23 @@ void EnumerativeConjectureGenerator::debugPrintIndex(
 }
 
 bool EnumerativeConjectureGenerator::variableLessThan(
-    const expr::TermCanonize& termCanonize, TNode n0, TNode n1)
+    const expr::TermCanonize& termCanonize,
+    const Map<TypeNode, std::uint8_t>& typeToNumber,
+    TNode n0,
+    TNode n1)
 {
-  return termCanonize.getIndexForFreeVariable(n0)
-         < termCanonize.getIndexForFreeVariable(n1);
+  const std::uint8_t t0 = typeToNumber.at(n0.getType());
+  const std::uint8_t t1 = typeToNumber.at(n1.getType());
+  const size_t i0 = termCanonize.getIndexForFreeVariable(n0);
+  const size_t i1 = termCanonize.getIndexForFreeVariable(n1);
+
+  return t0 < t1 || (t0 == t1 && i0 < i1);
 }
 
 std::vector<Node> EnumerativeConjectureGenerator::getSortedVariables(
-    const expr::TermCanonize& termCanonize, TNode term)
+    const expr::TermCanonize& termCanonize,
+    const Map<TypeNode, std::uint8_t>& typeToNumber,
+    TNode term)
 {
   Set<Node> variables;
 
@@ -973,9 +1013,11 @@ std::vector<Node> EnumerativeConjectureGenerator::getSortedVariables(
 
   Vector<Node> result(variables.cbegin(), variables.cend());
 
-  std::sort(result.begin(), result.end(), [termCanonize](TNode n0, TNode n1) {
-    return variableLessThan(termCanonize, n0, n1);
-  });
+  std::sort(result.begin(),
+            result.end(),
+            [&termCanonize, &typeToNumber](TNode n0, TNode n1) {
+              return variableLessThan(termCanonize, typeToNumber, n0, n1);
+            });
 
   return result;
 }
@@ -985,13 +1027,15 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
     const size_t maximumDifference,
     const Map<Node, Index>& rootVariableToIndex,
     expr::TermCanonize& termCanonize,
+    const Map<TypeNode, std::uint8_t>& typeToNumber,
     TNode canonical)
 {
   Vector<Vector<Node>> result;
 
   result.resize(maximumSize + 1);
 
-  const Vector<Node> variables = getSortedVariables(termCanonize, canonical);
+  const Vector<Node> variables =
+      getSortedVariables(termCanonize, typeToNumber, canonical);
 
   const size_t nVariables = variables.size();
 
@@ -1072,103 +1116,6 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
   }
 
   return result;
-}
-
-std::vector<std::vector<Node>>
-EnumerativeConjectureGenerator::oldFindCompatible(TNode lhs)
-{
-  std::vector<std::vector<Node>> sizeToCompatible;
-
-  sizeToCompatible.resize(d_maximumSize + 1);
-
-  std::unordered_set<Node> variableSet;
-
-  expr::getSubtermsKind(Kind::BOUND_VARIABLE, lhs, variableSet);
-
-  const size_t variableCount = variableSet.size();
-
-  std::vector<Node> variables;
-
-  variables.insert(variables.end(), variableSet.begin(), variableSet.end());
-
-  std::sort(variables.begin(), variables.end(), [this](Node n0, Node n1) {
-    return this->d_termCanonize.getIndexForFreeVariable(n0)
-           < this->d_termCanonize.getIndexForFreeVariable(n1);
-  });
-
-  struct Job
-  {
-    size_t d_position;
-    Index* d_index;
-    size_t d_skipped;
-    size_t d_difference;
-  };
-
-  std::vector<Job*> jobs;
-
-  for (size_t position = 0; position < variableCount; ++position)
-  {
-    Node variable = variables[position];
-
-    if (hasKey(d_variableToIndex, variable))
-    {
-      jobs.push_back(new Job{position + 1,
-                             &d_variableToIndex[variable],
-                             position,
-                             variableCount - 1});
-    }
-  }
-
-  while (!jobs.empty())
-  {
-    Job* job = jobs.back();
-
-    jobs.pop_back();
-
-    size_t jobPosition = job->d_position;
-    Index* jobIndex = job->d_index;
-    size_t jobSkipped = job->d_skipped;
-    size_t jobDifference = job->d_difference;
-
-    if (jobSkipped <= d_maximumDifference)
-    {
-      if (jobDifference <= d_maximumDifference)
-      {
-        std::vector<Node>& jobTerms = jobIndex->d_terms;
-
-        for (std::vector<Node>::const_iterator termRef = jobTerms.begin();
-             termRef != jobTerms.end();
-             ++termRef)
-        {
-          Node term = *termRef;
-
-          const size_t termSize = computeSize(term);
-
-          sizeToCompatible[termSize].push_back(term);
-        }
-      }
-
-      std::unordered_map<Node, Index>& jobVariableToIndex =
-          jobIndex->d_variableToIndex;
-
-      for (size_t position = jobPosition; position < variableCount; ++position)
-      {
-        Node variable = variables[position];
-
-        if (hasKey(jobVariableToIndex, variable))
-        {
-          jobs.push_back(new Job{position + 1,
-                                 &jobVariableToIndex[variable],
-                                 jobSkipped + position - jobPosition,
-                                 jobDifference - 1});
-        }
-      }
-    }
-
-    delete job;
-  }
-
-  return sizeToCompatible;
 }
 
 TypeNode EnumerativeConjectureGenerator::findTypeByName(
