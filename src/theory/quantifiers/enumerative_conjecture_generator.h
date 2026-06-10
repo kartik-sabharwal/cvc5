@@ -39,6 +39,15 @@ typedef std::vector<std::priority_queue<Candidate>> CandidateIndex;
 class EnumerativeConjectureGenerator : public QuantifiersModule
 {
  public:
+  enum FilterResult
+  {
+    TRIVIAL,
+    CACHED,
+    DEDUCTIVE,
+    INDUCTIVE,
+    NONE
+  };
+
   template <class T>
   using Vector = std::vector<T>;
 
@@ -47,6 +56,9 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
 
   template <class K, class V>
   using Map = std::unordered_map<K, V>;
+
+  template <class T>
+  using It = typename T::iterator;
 
   template <class T>
   using CIt = typename T::const_iterator;
@@ -65,6 +77,9 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
 
   template <class T, class U>
   using Pair = std::pair<T, U>;
+
+  template <class T>
+  using Optional = std::optional<T>;
 
   typedef Pair<size_t, size_t> Score;
 
@@ -110,7 +125,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       is mapped to APPLY_CONSTRUCTOR. */
   Map<Node, Kind> d_symbolToKind;
   /** Maps each relevant type to a list of "free" variables of that type. */
-  Map<TypeNode, std::vector<Node>> d_typeToVariables;
+  Map<TypeNode, Vector<Node>> d_typeToVariables;
   /** Maps each size from 0 to d_maximumSize to a set of canonical (LHS) terms.
    */
   Vector<Set<Node>> d_sizeToCanonicals;
@@ -123,7 +138,14 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   /** Conjectures that have been promoted to theorems because we were able to
    * prove them without induction. */
   Set<Node> d_deductivelyEntailed;
-
+  /**
+   * The non-quantified formulas necessary for inductive entailment checks will
+   * be stashed here.  These are exactly the fixed SAT literals in the theory
+   * of uninterpreted functions that do not contain skolem variables.  They are
+   * computed once, during the first call to this object's check() function,
+   * and then cached away for the remainder of cvc5's execution.
+   */
+  Optional<Vector<TNode>> d_initialFacts;
   /** Term canonization utility. */
   expr::TermCanonize d_termCanonize;
   /** Pointer to the current node manager. */
@@ -136,6 +158,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   size_t d_period;
   bool d_preferConstRepresentatives;
   bool d_preferActiveTerms;
+  Options d_defaultOptions;
 
   // Functions, non-static
 
@@ -148,6 +171,8 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   std::vector<std::vector<Node>> oldFindCompatible(TNode lhs);
 
   // Functions, static
+
+  static void debugPrintFacts(std::ostream& out, const Vector<TNode>& facts);
 
   static std::vector<std::vector<Node>> findCompatible(
       const size_t maximumSize,
@@ -164,16 +189,29 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       eq::EqualityEngine* equalityEngine,
       TNode canonical,
       const bool preferConstRepresentatives,
-      const bool preferActiveTerms);
+      const bool preferActiveTerms,
+      const std::int64_t substitutionLimit);
 
   template <class T>
-  static bool member(std::vector<T> vec, T val)
+  static bool member(const std::vector<T>& vec, T val)
   {
     return std::find(vec.begin(), vec.end(), val) != vec.end();
   }
 
   template <class T>
-  static bool member(std::unordered_set<T> set, T val)
+  static bool member(std::vector<T>& vec, T val)
+  {
+    return std::find(vec.begin(), vec.end(), val) != vec.end();
+  }
+
+  template <class T>
+  static bool member(const std::unordered_set<T>& set, T val)
+  {
+    return set.find(val) != set.end();
+  }
+
+  template <class T>
+  static bool member(std::unordered_set<T>& set, T val)
   {
     return set.find(val) != set.end();
   }
@@ -238,6 +276,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       const std::vector<TypeNode>& types,
       expr::TermCanonize& termCanonize,
       const size_t maximumSize,
+      const size_t varsPerType,
       std::unordered_map<TypeNode, std::vector<Node>>& typeToVariables);
 
   static std::vector<Node> getNonTerminals(
@@ -301,7 +340,8 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       eq::EqualityEngine* equalityEngine,
       const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
       const bool preferConstRepresentatives,
-      const bool preferActiveTerms);
+      const bool preferActiveTerms,
+      const std::int64_t substitutionLimit);
 
   static CandidateIndex getCandidateIndex(
       const size_t maximumSize,
@@ -309,18 +349,23 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       expr::TermCanonize& termCanonize,
       EntailmentCheck* entailmentCheck,
       eq::EqualityEngine* equalityEngine,
-      const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
-      const std::unordered_map<Node, Index>& variableToIndex,
+      const Vector<Set<Node>>& sizeToCanonicals,
+      const Map<Node, Index>& variableToIndex,
       const Map<TypeNode, std::uint8_t>& typeToNumber,
-      const std::unordered_map<Node, std::vector<Subs>>&
-          canonicalToSubstitutions);
+      const Map<Node, Vector<Subs>>& canonicalToSubstitutions,
+      NodeManager* nodeMgr,
+      const Set<Node>& dedEnt,
+      const Set<Node>& indEnt);
 
   static std::pair<size_t, size_t> getScore(
       EntailmentCheck* entailmentCheck,
       const eq::EqualityEngine* equalityEngine,
       TNode canonical,
       TNode compatible,
-      const std::vector<Subs>& substitutions);
+      const Vector<Subs>& substitutions,
+      NodeManager* nodeMgr,
+      const Set<Node>& dedEnt,
+      const Set<Node>& indEnt);
 
   static Vector<Node> getSortedVariables(
       const expr::TermCanonize& termCanonize,
@@ -346,6 +391,52 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
 
   static void updateTypeToNumber(const Vector<TypeNode>& types,
                                  Map<TypeNode, std::uint8_t>& typeToNum);
+
+  static void filterCandidates(
+      Env& env,
+      Options& subsolverOpts,
+      quantifiers::QuantifiersInferenceManager& quantInfMgr,
+      quantifiers::TermRegistry& termReg,
+      NodeManager* nodeMgr,
+      const std::int64_t initialFuel,
+      Set<Node>& indEnt,
+      Set<Node>& dedEnt,
+      const size_t timeout,
+      const Vector<TNode>& initialFacts,
+      Vector<PriorityQueue<Candidate>>& candIdx);
+
+  static bool filterConjecture(Env& env,
+                               Options& subsolverOpts,
+                               quantifiers::TermRegistry& termReg,
+                               Set<Node>& indEnt,
+                               Set<Node>& dedEnt,
+                               Vector<Node>& indEntBuf,
+                               Optional<std::int64_t>& fuel,
+                               const size_t timeout,
+                               const Vector<TNode>& initialFacts,
+                               TNode conj);
+
+  static void assertConjecture(
+      quantifiers::QuantifiersInferenceManager& quantInfMgr, TNode conj);
+
+  static Node candidateToConjecture(NodeManager* nodeMgr,
+                                    const Candidate& cand);
+
+  static bool isEntailed(Env& env,
+                         Options& subsolverOpts,
+                         quantifiers::TermRegistry& termReg,
+                         const Vector<Node>& extra,
+                         const bool induct,
+                         const size_t timeout,
+                         const Vector<TNode>& initialFacts,
+                         TNode conj);
+
+  static void debugPrintAssertions(std::ostream& out,
+                                   const Vector<Node>& assertions);
+
+  static void debugPrintFilterConjecture(std::ostream& out, TNode conj, FilterResult result);
+
+  static Vector<TNode> getInitialFacts(Valuation& valuation);
 };
 
 class Decision;

@@ -1984,7 +1984,31 @@ name   = "Quantifiers"
   long     = "ecg-conjectures-per-round=N"
   type     = "int64_t"
   default  = "-1"
-  help     = "number of conjectures to generate per instantiation round, -1 for no limit"
+  help     = "maximum number of conjectures to assert per round of the enumerative conjecture generator (-1 == no limit, default)"
+
+[[option]]
+  name     = "ecgVarsPerType"
+  category = "expert"
+  long     = "ecg-vars-per-type=N"
+  type     = "size_t"
+  default  = "4"
+  help     = "the number of free variables to use for each type when generating conjectures (default 4)"
+
+[[option]]
+  name     = "ecgSubsolverTimeout"
+  category = "expert"
+  long     = "ecg-subsolver-timeout=N"
+  type     = "size_t"
+  default  = "100"
+  help     = "the timeout in milliseconds for inductive and deductive entailment checks (default 100)"
+
+[[option]]
+  name     = "ecgSubstitutionLimit"
+  category = "expert"
+  long     = "ecg-substitution-limit=N"
+  type     = "int64_t"
+  default  = "-1"
+  help     = "the maximum number of grounding substitutions we should find for any one canonical (LHS) term before we try to filter conjectures based on e-matching (-1 == no limit, default)"
 
 [[option]]
   name       = "contextualEnumerator"
@@ -1999,7 +2023,7 @@ name   = "Quantifiers"
   category   = "expert"
   long       = "ctx-enum-limit=N"
   type       = "int64_t"
-  default    = "50"
+  default    = "10"
   help       = "maximum number of terms to enumerate per function symbol"
 
 [[option]]

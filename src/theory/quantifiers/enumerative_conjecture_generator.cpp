@@ -9,7 +9,10 @@
 #include "expr/skolem_manager.h"
 #include "expr/subs.h"
 #include "expr/sygus_grammar.h"
+#include "smt/set_defaults.h"
 #include "theory/datatypes/sygus_datatype_utils.h"
+#include "theory/quantifiers/first_order_model.h"
+#include "theory/smt_engine_subsolver.h"
 
 namespace cvc5::internal {
 namespace theory {
@@ -37,6 +40,46 @@ CVC5_UNUSED std::ostream& operator<<(std::ostream& out,
                                      const Candidate& candidate)
 {
   out << candidate.d_confirmed;
+  return out;
+}
+
+std::ostream& operator<<(std::ostream& out,
+                         EnumerativeConjectureGenerator::FilterResult result)
+{
+  switch (result)
+  {
+    case EnumerativeConjectureGenerator::TRIVIAL:
+    {
+      out << "TRIVIAL";
+      break;
+    }
+    case EnumerativeConjectureGenerator::CACHED:
+    {
+      out << "CACHED";
+      break;
+    }
+    case EnumerativeConjectureGenerator::DEDUCTIVE:
+    {
+      out << "DEDUCTIVE";
+      break;
+    }
+    case EnumerativeConjectureGenerator::INDUCTIVE:
+    {
+      out << "INDUCTIVE";
+      break;
+    }
+    case EnumerativeConjectureGenerator::NONE:
+    {
+      out << "NONE";
+      break;
+    }
+    default:
+    {
+      out << "impossible!";
+      break;
+    }
+  }
+
   return out;
 }
 
@@ -72,11 +115,18 @@ EnumerativeConjectureGenerator::EnumerativeConjectureGenerator(
       options().quantifiers.enumerativeConjectureGeneratorMaximumSize;
   d_maximumDifference =
       options().quantifiers.enumerativeConjectureGeneratorMaximumDifference;
-  d_clock = 0;
+  d_clock = 1;
   d_period = options().quantifiers.enumerativeConjectureGeneratorPeriod;
   d_preferConstRepresentatives =
       options().quantifiers.preferConstRepresentatives;
   d_preferActiveTerms = options().quantifiers.preferActiveTerms;
+  d_defaultOptions.copyValues(options());
+  d_defaultOptions.write_quantifiers().quantInduction = false;
+  d_defaultOptions.write_quantifiers().dtStcInduction = false;
+  d_defaultOptions.write_quantifiers().conjectureGen = false;
+  d_defaultOptions.write_quantifiers().enumerativeConjectureGenerator = false;
+  d_defaultOptions.write_quantifiers().contextualEnumerator = false;
+  d_defaultOptions.write_quantifiers().quantSubCbqi = false;
 }
 
 EnumerativeConjectureGenerator::~EnumerativeConjectureGenerator() {}
@@ -240,7 +290,8 @@ void EnumerativeConjectureGenerator::updateTypeToNonTerminal(
 void EnumerativeConjectureGenerator::updateTypeToVariables(
     const std::vector<TypeNode>& types,
     expr::TermCanonize& termCanonize,
-    const size_t maximumSize,
+    CVC5_UNUSED const size_t maximumSize,
+    const size_t varsPerType,
     std::unordered_map<TypeNode, std::vector<Node>>& typeToVariables)
 {
   for (std::vector<TypeNode>::const_iterator typeRef = types.begin();
@@ -253,7 +304,7 @@ void EnumerativeConjectureGenerator::updateTypeToVariables(
     {
       std::vector<Node>& variables = typeToVariables[type];
 
-      for (size_t i = 0; i < maximumSize; ++i)
+      for (size_t i = 0; i < varsPerType; ++i)
       {
         variables.push_back(termCanonize.getCanonicalFreeVar(type, i));
       }
@@ -473,11 +524,10 @@ EnumerativeConjectureGenerator::getCanonicalToSubstitutions(
     eq::EqualityEngine* equalityEngine,
     const std::vector<std::unordered_set<Node>>& sizeToCanonicals,
     const bool preferConstRepresentatives,
-    const bool preferActiveTerms)
+    const bool preferActiveTerms,
+    const std::int64_t substitutionLimit)
 {
-  typedef std::unordered_map<Node, std::vector<Subs>> Result;
-
-  Result result;
+  Map<Node, Vector<Subs>> result;
 
   for (size_t size = 0; size < sizeToCanonicals.size(); ++size)
   {
@@ -495,7 +545,8 @@ EnumerativeConjectureGenerator::getCanonicalToSubstitutions(
                                       equalityEngine,
                                       lhs,
                                       preferConstRepresentatives,
-                                      preferActiveTerms);
+                                      preferActiveTerms,
+                                      substitutionLimit);
     }
   }
 
@@ -529,7 +580,10 @@ CandidateIndex EnumerativeConjectureGenerator::getCandidateIndex(
     const Vector<Set<Node>>& szToCanons,
     const Map<Node, Index>& varToIdx,
     const Map<TypeNode, std::uint8_t>& typeToNumber,
-    const Map<Node, Vector<Subs>>& lhsToSubss)
+    const Map<Node, Vector<Subs>>& lhsToSubss,
+    NodeManager* nodeMgr,
+    const Set<Node>& dedEnt,
+    const Set<Node>& indEnt)
 {
   CVC5_UNUSED std::ostream& out = Trace("enumerative-conjecture-generator");
 
@@ -563,18 +617,16 @@ CandidateIndex EnumerativeConjectureGenerator::getCandidateIndex(
         {
           TNode rhs = (*compat)[0];
 
-          if (lhs != rhs)
+          const Score score =
+              getScore(entChk, ee, lhs, rhs, subss, nodeMgr, dedEnt, indEnt);
+
+          const size_t tested = std::get<0>(score);
+
+          const size_t confirmed = std::get<1>(score);
+
+          if (tested > 0 && confirmed == tested)
           {
-            const Score score = getScore(entChk, ee, lhs, rhs, subss);
-
-            const size_t tested = std::get<0>(score);
-
-            const size_t confirmed = std::get<1>(score);
-
-            if (tested > 0 && confirmed == tested)
-            {
-              cands.emplace(lhs, rhs, tested, confirmed);
-            }
+            cands.emplace(lhs, rhs, tested, confirmed);
           }
         }
       }
@@ -589,24 +641,41 @@ std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScore(
     const eq::EqualityEngine* ee,
     TNode lhs,
     TNode rhs,
-    const Vector<Subs>& subss)
+    const Vector<Subs>& subss,
+    NodeManager* nodeMgr,
+    const Set<Node>& dedEnt,
+    const Set<Node>& indEnt)
 {
   size_t tested = 0;
   size_t confirmed = 0;
 
-  for (CIt<Vector<Subs>> subs = subss.begin(); subs != subss.end(); ++subs)
+  Node conj = candidateToConjecture(nodeMgr, Candidate(lhs, rhs, 0, 0));
+
+  if (lhs == rhs || member(dedEnt, conj) || member(indEnt, conj))
   {
-    TNode concrLhs = entChk->getEntailedTerm(subs->apply(lhs));
-    TNode concrRhs = entChk->getEntailedTerm(subs->apply(rhs));
+    tested = 1;
+    confirmed = 1;
+  }
+  else
+  {
+    CIt<Vector<Subs>> subs = subss.begin();
 
-    if (!concrLhs.isNull() && !concrRhs.isNull())
+    while (tested == confirmed && subs != subss.end())
     {
-      ++tested;
+      TNode concrLhs = entChk->getEntailedTerm(subs->apply(lhs));
+      TNode concrRhs = entChk->getEntailedTerm(subs->apply(rhs));
 
-      if (!ee->areDisequal(concrLhs, concrRhs, false))
+      if (!concrLhs.isNull() && !concrRhs.isNull())
       {
-        ++confirmed;
+        ++tested;
+
+        if (!ee->areDisequal(concrLhs, concrRhs, false))
+        {
+          ++confirmed;
+        }
       }
+
+      ++subs;
     }
   }
 
@@ -671,8 +740,11 @@ void EnumerativeConjectureGenerator::checkHelper()
 
     updateTypeToNonTerminal(d_relevantTypes, d_typeToNonTerminal);
 
-    updateTypeToVariables(
-        d_relevantTypes, d_termCanonize, d_maximumSize, d_typeToVariables);
+    updateTypeToVariables(d_relevantTypes,
+                          d_termCanonize,
+                          d_maximumSize,
+                          options().quantifiers.ecgVarsPerType,
+                          d_typeToVariables);
 
     const TypeNode grammarType = getGrammarType(nodeMgr,
                                                 d_rootNonTerminal,
@@ -700,7 +772,8 @@ void EnumerativeConjectureGenerator::checkHelper()
                                   getEqualityEngine(),
                                   d_sizeToCanonicals,
                                   d_preferConstRepresentatives,
-                                  d_preferActiveTerms);
+                                  d_preferActiveTerms,
+                                  options().quantifiers.ecgSubstitutionLimit);
 
   CandidateIndex candIdx = getCandidateIndex(d_maximumSize,
                                              d_maximumDifference,
@@ -710,9 +783,24 @@ void EnumerativeConjectureGenerator::checkHelper()
                                              d_sizeToCanonicals,
                                              d_variableToIndex,
                                              d_typeToNumber,
-                                             lhsToSubss);
+                                             lhsToSubss,
+                                             nodeManager(),
+                                             d_deductivelyEntailed,
+                                             d_inductivelyEntailed);
 
-  debugPrintCandidateIndex(traceStream, candIdx);
+  // debugPrintCandidateIndex(traceStream, candIdx);
+
+  filterCandidates(d_env,
+                   d_defaultOptions,
+                   d_qim,
+                   d_treg,
+                   nodeManager(),
+                   options().quantifiers.ecgConjecturesPerRound,
+                   d_inductivelyEntailed,
+                   d_deductivelyEntailed,
+                   options().quantifiers.ecgSubsolverTimeout,
+                   *d_initialFacts,
+                   candIdx);
 
   endCallDebug();
 }
@@ -776,9 +864,53 @@ void EnumerativeConjectureGenerator::debugPrintCandidateIndex(
   }
 }
 
+void EnumerativeConjectureGenerator::debugPrintFacts(std::ostream& out,
+                                                     const Vector<TNode>& facts)
+{
+  out << "Facts:" << std::endl;
+
+  for (CIt<Vector<TNode>> fact = facts.begin(); fact != facts.end(); ++fact)
+  {
+    out << "* " << *fact << std::endl;
+  }
+}
+
+std::vector<TNode> EnumerativeConjectureGenerator::getInitialFacts(
+    Valuation& valuation)
+{
+  Vector<TNode> result;
+
+  for (CIt<context::CDList<Assertion>> assertion =
+           valuation.factsBegin(THEORY_UF);
+       assertion != valuation.factsEnd(THEORY_UF);
+       ++assertion)
+  {
+    if (valuation.isSatLiteral(*assertion) && valuation.isFixed(*assertion))
+    {
+      Set<Node> skolems;
+
+      expr::getSubtermsKind(Kind::SKOLEM, *assertion, skolems, false);
+
+      if (skolems.empty())
+      {
+        result.push_back(*assertion);
+      }
+    }
+  }
+
+  return result;
+}
+
 void EnumerativeConjectureGenerator::check(CVC5_UNUSED Theory::Effort effort,
                                            QEffort qEffort)
 {
+  if (!d_initialFacts)
+  {
+    d_initialFacts = getInitialFacts(d_qstate.getValuation());
+  }
+
+  debugPrintFacts(Trace("enumerative-conjecture-generator"), *d_initialFacts);
+
   updateClock(qEffort, d_clock, d_period);
 
   if (d_clock == 0)
@@ -1030,6 +1162,8 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
     const Map<TypeNode, std::uint8_t>& typeToNumber,
     TNode canonical)
 {
+  const bool canonIsApplyCtor = canonical.getKind() == Kind::APPLY_CONSTRUCTOR;
+
   Vector<Vector<Node>> result;
 
   result.resize(maximumSize + 1);
@@ -1092,7 +1226,13 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
       for (CIt<Vector<Node>> jTerm = jTerms.begin(); jTerm != jTerms.end();
            ++jTerm)
       {
-        result[computeSize(*jTerm)].push_back(*jTerm);
+        const bool compatIsApplyCtor =
+            jTerm->getKind() == Kind::APPLY_CONSTRUCTOR;
+
+        if (!canonIsApplyCtor || !compatIsApplyCtor)
+        {
+          result[computeSize(*jTerm)].push_back(*jTerm);
+        }
       }
     }
 
@@ -1163,9 +1303,11 @@ std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
     eq::EqualityEngine* equalityEngine,
     TNode canonical,
     const bool preferConstRepresentatives,
-    const bool preferActiveTerms)
+    const bool preferActiveTerms,
+    const std::int64_t substitutionLimit)
 {
   Vector<Subs> substitutions;
+  std::int64_t substitutionsSize = 0;
   Vector<Node> preferredClasses;
 
   for (eq::EqClassesIterator reprPtr = eq::EqClassesIterator(equalityEngine);
@@ -1205,15 +1347,19 @@ std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
     Subs substitution;
 
     while (!decisionQueue.empty() && virtualBegin <= decisionQueue.size()
-           && implies(virtualBegin < decisionQueue.size()
-                          && decisionQueue[virtualBegin]->isFinished(),
-                      [virtualBegin]() { return virtualBegin > 0; }))
+           && (!(virtualBegin < decisionQueue.size()
+                 && decisionQueue[virtualBegin]->isFinished())
+               || virtualBegin > 0)
+           && (!(substitutionLimit != -1)
+               || substitutionsSize <= substitutionLimit))
     {
       if (virtualBegin == decisionQueue.size())
       {
         // virtualBegin > 0 because decisionQueue.size() > 0
 
         substitutions.push_back(substitution);
+
+        ++substitutionsSize;
 
         --virtualBegin;
 
@@ -1247,6 +1393,234 @@ std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutions(
   }
 
   return substitutions;
+}
+
+void EnumerativeConjectureGenerator::debugPrintAssertions(
+    std::ostream& out, const Vector<Node>& assertions)
+{
+  out << "Subsolver knows:" << std::endl;
+  for (CIt<Vector<Node>> assertion = assertions.begin();
+       assertion != assertions.end();
+       ++assertion)
+  {
+    out << *assertion << std::endl;
+  }
+  out << "*****" << std::endl;
+}
+
+bool EnumerativeConjectureGenerator::isEntailed(
+    Env& env,
+    Options& defaultOpts,
+    quantifiers::TermRegistry& termReg,
+    const Vector<Node>& extra,
+    const bool induct,
+    const size_t timeout,
+    const Vector<TNode>& initialFacts,
+    TNode conj)
+{
+  const bool instStrategyOn = TraceChannel.isOn("inst-strategy");
+
+  if (instStrategyOn)
+  {
+    TraceChannel.off("inst-strategy");
+  }
+
+  Ptr<SolverEngine> subsolver;
+
+  Options subsolverOpts;
+  subsolverOpts.copyValues(defaultOpts);
+
+  if (induct)
+  {
+    subsolverOpts.write_quantifiers().dtStcInduction = true;
+    subsolverOpts.write_quantifiers().quantInduction = true;
+  }
+
+  smt::SetDefaults::disableChecking(subsolverOpts);
+
+  SubsolverSetupInfo setupInfo(env, subsolverOpts);
+
+  initializeSubsolver(
+      env.getNodeManager(), subsolver, setupInfo, true, timeout);
+
+  quantifiers::FirstOrderModel* model = termReg.getModel();
+
+  for (CIt<Vector<TNode>> assertion = initialFacts.begin();
+       assertion != initialFacts.end();
+       ++assertion)
+  {
+    subsolver->assertFormula(*assertion);
+  }
+
+  for (size_t i = 0; i < model->getNumAssertedQuantifiers(); i++)
+  {
+    TNode phi = model->getAssertedQuantifier(i);
+    subsolver->assertFormula(phi);
+  }
+
+  for (CIt<Vector<Node>> phi = extra.begin(); phi != extra.end(); ++phi)
+  {
+    subsolver->assertFormula(*phi);
+  }
+
+  subsolver->assertFormula(conj.negate());
+
+  const Vector<Node> subsolverAssertions = subsolver->getAssertions();
+
+  const Result result = subsolver->checkSat();
+
+  if (instStrategyOn)
+  {
+    TraceChannel.on("inst-strategy");
+  }
+
+  return result.getStatus() == Result::UNSAT;
+}
+
+bool EnumerativeConjectureGenerator::filterConjecture(
+    Env& env,
+    Options& subsolverOpts,
+    quantifiers::TermRegistry& termReg,
+    Set<Node>& indEnt,
+    Set<Node>& dedEnt,
+    Vector<Node>& indEntBuf,
+    Optional<std::int64_t>& fuel,
+    const size_t timeout,
+    const Vector<TNode>& initialFacts,
+    TNode conj)
+{
+  FilterResult result = NONE;
+
+  if (conj[1][0] == conj[1][1])
+  {
+    result = TRIVIAL;
+  }
+  else if (member(indEnt, Node(conj)) || member(dedEnt, Node(conj)))
+  {
+    result = CACHED;
+  }
+  else if (isEntailed(env,
+                      subsolverOpts,
+                      termReg,
+                      indEntBuf,
+                      false,
+                      timeout,
+                      initialFacts,
+                      conj))
+  {
+    dedEnt.insert(conj);
+
+    result = DEDUCTIVE;
+  }
+  else if (isEntailed(env,
+                      subsolverOpts,
+                      termReg,
+                      indEntBuf,
+                      true,
+                      timeout,
+                      initialFacts,
+                      conj))
+  {
+    indEnt.insert(conj);
+
+    indEntBuf.push_back(conj);
+
+    if (fuel)
+    {
+      fuel.emplace(*fuel - 1);
+    }
+
+    result = INDUCTIVE;
+  }
+
+  // debugPrintFilterConjecture(Trace("enumerative-conjecture-generator"), conj,
+  // result);
+
+  return result == INDUCTIVE;
+}
+
+void EnumerativeConjectureGenerator::assertConjecture(
+    quantifiers::QuantifiersInferenceManager& quantInfMgr, TNode conj)
+{
+  quantInfMgr.addPendingLemma(
+      conj, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
+}
+
+Node EnumerativeConjectureGenerator::candidateToConjecture(
+    NodeManager* nodeMgr, const Candidate& cand)
+{
+  Node lhs = cand.d_left;
+  Set<Node> vars;
+  expr::getFreeVariables(lhs, vars);
+  Node bvs = nodeMgr->mkNode(Kind::BOUND_VAR_LIST,
+                             Vector<Node>(vars.begin(), vars.end()));
+  Node rhs = cand.d_right;
+  Node eq = lhs.eqNode(rhs);
+  return nodeMgr->mkNode(Kind::FORALL, bvs, eq);
+}
+
+void EnumerativeConjectureGenerator::filterCandidates(
+    Env& env,
+    Options& subsolverOpts,
+    quantifiers::QuantifiersInferenceManager& quantInfMgr,
+    quantifiers::TermRegistry& termReg,
+    NodeManager* nodeMgr,
+    const std::int64_t initialFuel,
+    Set<Node>& indEnt,
+    Set<Node>& dedEnt,
+    const size_t timeout,
+    const Vector<TNode>& initialFacts,
+    Vector<PriorityQueue<Candidate>>& candIdx)
+{
+  Optional<std::int64_t> fuel(initialFuel);
+
+  if (initialFuel == -1)
+  {
+    fuel.reset();
+  }
+
+  Vector<Node> indEntBuf;
+
+  for (It<Vector<PriorityQueue<Candidate>>> candsPtr = candIdx.begin();
+       candsPtr != candIdx.end();
+       ++candsPtr)
+  {
+    PriorityQueue<Candidate>& cands = *candsPtr;
+
+    while (!cands.empty())
+    {
+      const Candidate cand = cands.top();
+
+      cands.pop();
+
+      Node conj = candidateToConjecture(nodeMgr, cand);
+
+      if (filterConjecture(env,
+                           subsolverOpts,
+                           termReg,
+                           indEnt,
+                           dedEnt,
+                           indEntBuf,
+                           fuel,
+                           timeout,
+                           initialFacts,
+                           conj))
+      {
+        assertConjecture(quantInfMgr, conj);
+
+        if (fuel && *fuel < 1)
+        {
+          return;
+        }
+      }
+    }
+  }
+}
+
+void EnumerativeConjectureGenerator::debugPrintFilterConjecture(
+    std::ostream& out, TNode conj, FilterResult result)
+{
+  out << "Conjecture " << conj << " is " << result << std::endl;
 }
 
 Decision::Decision(TermDb* termDatabase,
