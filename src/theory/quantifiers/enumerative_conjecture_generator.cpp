@@ -1162,7 +1162,9 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
     const Map<TypeNode, std::uint8_t>& typeToNumber,
     TNode canonical)
 {
-  const bool canonIsApplyCtor = canonical.getKind() == Kind::APPLY_CONSTRUCTOR;
+  TNode lhs = canonical[0];
+  const TypeNode lhsType = lhs.getType();
+  const bool lhsIsApplyCtor = lhs.getKind() == Kind::APPLY_CONSTRUCTOR;
 
   Vector<Vector<Node>> result;
 
@@ -1226,10 +1228,9 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
       for (CIt<Vector<Node>> jTerm = jTerms.begin(); jTerm != jTerms.end();
            ++jTerm)
       {
-        const bool compatIsApplyCtor =
-            jTerm->getKind() == Kind::APPLY_CONSTRUCTOR;
-
-        if (!canonIsApplyCtor || !compatIsApplyCtor)
+        if (lhsType == (*jTerm)[0].getType()
+            && (!lhsIsApplyCtor
+                || (*jTerm)[0].getKind() != Kind::APPLY_CONSTRUCTOR))
         {
           result[computeSize(*jTerm)].push_back(*jTerm);
         }
@@ -1555,6 +1556,7 @@ Node EnumerativeConjectureGenerator::candidateToConjecture(
   Node bvs = nodeMgr->mkNode(Kind::BOUND_VAR_LIST,
                              Vector<Node>(vars.begin(), vars.end()));
   Node rhs = cand.d_right;
+  Assert(lhs.getType() == rhs.getType());
   Node eq = lhs.eqNode(rhs);
   return nodeMgr->mkNode(Kind::FORALL, bvs, eq);
 }

@@ -70,9 +70,6 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   using Ptr = std::unique_ptr<T>;
 
   template <class T>
-  using Ptr = std::unique_ptr<T>;
-
-  template <class T>
   using PriorityQueue = std::priority_queue<T>;
 
   template <class T, class U>
