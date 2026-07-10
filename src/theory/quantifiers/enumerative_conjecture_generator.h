@@ -142,7 +142,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
    * computed once, during the first call to this object's check() function,
    * and then cached away for the remainder of cvc5's execution.
    */
-  Optional<Vector<TNode>> d_initialFacts;
+  Optional<Set<TNode>> d_initialFacts;
   /** Term canonization utility. */
   expr::TermCanonize d_termCanonize;
   /** Pointer to the current node manager. */
@@ -156,6 +156,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   bool d_preferConstRepresentatives;
   bool d_preferActiveTerms;
   Options d_defaultOptions;
+  Set<TNode> d_conjectures;
 
   // Functions, non-static
 
@@ -169,7 +170,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
 
   // Functions, static
 
-  static void debugPrintFacts(std::ostream& out, const Vector<TNode>& facts);
+  static void debugPrintFacts(std::ostream& out, const Set<TNode>& facts);
 
   static std::vector<std::vector<Node>> findCompatible(
       const size_t maximumSize,
@@ -247,9 +248,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       const size_t maximumSize,
       const std::vector<std::unordered_set<Node>>& sizeToCanonicals);
 
-  static void updateClock(const QEffort qEffort,
-                          size_t& clock,
-                          const size_t period);
+  static void updateClock(size_t& clock, const size_t period);
 
   static std::vector<Node> getRelevantFunctionSymbols(TermDb* termDatabase);
 
@@ -399,8 +398,10 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       Set<Node>& indEnt,
       Set<Node>& dedEnt,
       const size_t timeout,
-      const Vector<TNode>& initialFacts,
-      Vector<PriorityQueue<Candidate>>& candIdx);
+      const Set<TNode>& initialFacts,
+      Vector<PriorityQueue<Candidate>>& candIdx,
+      Set<TNode>& conjectures,
+      const quantifiers::QuantifiersState& quantifiersState);
 
   static bool filterConjecture(Env& env,
                                Options& subsolverOpts,
@@ -410,14 +411,18 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
                                Vector<Node>& indEntBuf,
                                Optional<std::int64_t>& fuel,
                                const size_t timeout,
-                               const Vector<TNode>& initialFacts,
-                               TNode conj);
+                               const Set<TNode>& initialFacts,
+                               TNode conj,
+                               const Set<TNode>& conjectures,
+                               const TNode trueNode,
+                               const quantifiers::QuantifiersState& quantifiersState);
 
   static void assertConjecture(
       quantifiers::QuantifiersInferenceManager& quantInfMgr, TNode conj);
 
   static Node candidateToConjecture(NodeManager* nodeMgr,
-                                    const Candidate& cand);
+                                    const Candidate& cand,
+                                    theory::Rewriter* rewriter);
 
   static bool isEntailed(Env& env,
                          Options& subsolverOpts,
@@ -425,7 +430,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
                          const Vector<Node>& extra,
                          const bool induct,
                          const size_t timeout,
-                         const Vector<TNode>& initialFacts,
+                         const Set<TNode>& initialFacts,
                          TNode conj);
 
   static void debugPrintAssertions(std::ostream& out,
@@ -433,7 +438,9 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
 
   static void debugPrintFilterConjecture(std::ostream& out, TNode conj, FilterResult result);
 
-  static Vector<TNode> getInitialFacts(Valuation& valuation);
+  static Set<TNode> getProvedConjectures(const Set<TNode>& conjectures, const Valuation& valuation, const quantifiers::TermRegistry& termReg);
+
+  static Set<TNode> getInitialFacts(Valuation& valuation, quantifiers::TermRegistry& termReg);
 };
 
 class Decision;

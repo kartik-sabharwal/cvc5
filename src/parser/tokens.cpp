@@ -121,6 +121,7 @@ std::ostream& operator<<(std::ostream& o, Token t)
     case Token::UNTERMINATED_STRING_LITERAL:
       o << "UNTERMINATED_STRING_LITERAL";
       break;
+    case Token::GET_SCORE_TOK: o << "GET_SCORE_TOK"; break;
     case Token::NONE: o << "NONE"; break;
     default: o << "Unknown Token (" << unsigned(t) << ")"; break;
   }

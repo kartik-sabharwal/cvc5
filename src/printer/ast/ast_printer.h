@@ -151,6 +151,9 @@ class AstPrinter : public cvc5::internal::Printer
   /** Print quit command */
   void toStreamCmdQuit(std::ostream& out) const override;
 
+  /** Print get-score command */
+  void toStreamCmdGetScore(std::ostream& out, Node node) const override;
+
  private:
   void toStream(std::ostream& out,
                 TNode n,

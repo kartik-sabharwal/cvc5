@@ -7248,6 +7248,11 @@ Term Solver::simplify(const Term& term, bool applySubs)
   CVC5_API_TRY_CATCH_END;
 }
 
+void Solver::getScore(const Term& term) const
+{
+  d_slv->getScore(term.d_node.operator*());
+}
+
 /* SMT-LIB commands                                                           */
 /* -------------------------------------------------------------------------- */
 

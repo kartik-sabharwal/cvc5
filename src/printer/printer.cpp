@@ -629,4 +629,9 @@ void Printer::toStreamCmdDeclareHeap(std::ostream& out,
   printUnknownCommand(out, "declare-heap");
 }
 
+void Printer::toStreamCmdGetScore(std::ostream& out, CVC5_UNUSED Node node) const
+{
+  printUnknownCommand(out, "get-score");
+}
+
 }  // namespace cvc5::internal

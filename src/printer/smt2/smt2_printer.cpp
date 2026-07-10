@@ -989,12 +989,27 @@ bool Smt2Printer::toStreamBase(std::ostream& out,
       else
       {
         stillNeedToPrintParams = false;
-        out << "(_ is ";
-        toStream(out,
-                 dt[cindex].getConstructor(),
-                 lbind,
-                 toDepth < 0 ? toDepth : toDepth - 1);
-        out << ")";
+
+        {
+          std::stringstream nameStream;
+          nameStream << dt[cindex].getConstructor();
+          std::string name = nameStream.str();
+          if (name[0] == '|')
+          {
+            out << "|is-" << name.substr(1);
+          }
+          else
+          {
+            out << "is-" << name;
+          }
+        }
+
+        // out << "(_ is ";
+        // out << "is-";
+        // toStream(out,
+        //          dt[cindex].getConstructor(),
+        //          lbind,
+        //          toDepth < 0 ? toDepth : toDepth - 1);
       }
     }
     break;
@@ -1205,11 +1220,14 @@ std::string Smt2Printer::smtKindString(Kind k)
     case Kind::GT: return ">";
     case Kind::GEQ: return ">=";
     case Kind::DIVISION: return "/";
-    case Kind::DIVISION_TOTAL: return "/_total";
+    // case Kind::DIVISION_TOTAL: return "/_total";
+    case Kind::DIVISION_TOTAL: return "/";
     case Kind::INTS_DIVISION: return "div";
-    case Kind::INTS_DIVISION_TOTAL: return "div_total";
+    // case Kind::INTS_DIVISION_TOTAL: return "div_total";
+    case Kind::INTS_DIVISION_TOTAL: return "div";
     case Kind::INTS_MODULUS: return "mod";
-    case Kind::INTS_MODULUS_TOTAL: return "mod_total";
+    // case Kind::INTS_MODULUS_TOTAL: return "mod_total";
+    case Kind::INTS_MODULUS_TOTAL: return "mod";
     case Kind::INTS_LOG2: return "int.log2";
     case Kind::INTS_ISPOW2: return "int.ispow2";
     case Kind::ABS: return "abs";
@@ -2422,6 +2440,11 @@ void Smt2Printer::toStreamCmdGetQuantifierElimination(std::ostream& out,
                                                       bool doFull) const
 {
   out << '(' << (doFull ? "get-qe" : "get-qe-disjunct") << ' ' << n << ')';
+}
+
+void Smt2Printer::toStreamCmdGetScore(std::ostream& out, Node node) const
+{
+  out << "(get-score " << node << ')';
 }
 
 /*

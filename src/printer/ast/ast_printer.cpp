@@ -383,6 +383,11 @@ void AstPrinter::toStreamCmdDatatypeDeclaration(
   out << "])" << std::endl;
 }
 
+void AstPrinter::toStreamCmdGetScore(std::ostream& out, Node node) const
+{
+  out << "GetScore(" << node << ')' << std::endl;
+}
+
 void AstPrinter::toStreamWithLetify(std::ostream& out,
                                     Node n,
                                     int toDepth,

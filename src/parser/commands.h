@@ -1245,6 +1245,18 @@ class CVC5_EXPORT QuitCommand : public Cmd
   void toStream(std::ostream& out) const override;
 }; /* class QuitCommand */
 
+class CVC5_EXPORT GetScoreCommand : public Cmd
+{
+ protected:
+  cvc5::Term d_term;
+ public:
+  GetScoreCommand(const cvc5::Term& term);
+  cvc5::Term getTerm() const;
+  void invoke(cvc5::Solver* solver, parser::SymManager* sm) override;
+  std::string getCommandName() const override;
+  void toStream(std::ostream& out) const override;
+}; /* class GetScoreCommand */
+
 }  // namespace parser
 }  // namespace cvc5
 

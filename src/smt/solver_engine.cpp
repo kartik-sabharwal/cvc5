@@ -48,6 +48,7 @@
 #include "smt/env.h"
 #include "smt/expand_definitions.h"
 #include "smt/find_synth_solver.h"
+#include "smt/get_score.h"
 #include "smt/interpolation_solver.h"
 #include "smt/listeners.h"
 #include "smt/logic_exception.h"
@@ -946,6 +947,21 @@ void SolverEngine::assertFormula(const Node& formula)
   beginCall();
   ensureWellFormedTerm(formula, "assertFormula");
   assertFormulaInternal(formula);
+}
+
+void SolverEngine::getScore(Node& conjecture)
+{
+  theory::TrustSubstitutionMap& topLvlSubs =
+      d_env->getTopLevelSubstitutions();
+
+  const Node newConjecture = topLvlSubs.apply(conjecture);
+
+  std::tuple<uint64_t, uint64_t, uint64_t> score =
+      getScoreInternal(newConjecture, getAvailableModel("get-score"));
+
+  std::cout << std::get<0>(score) << " confirmed / ";
+  std::cout << std::get<1>(score) << " tested / ";
+  std::cout << std::get<2>(score) << " skipped" << std::endl;
 }
 
 void SolverEngine::assertFormulaInternal(const Node& formula)

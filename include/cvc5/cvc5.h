@@ -6734,6 +6734,8 @@ class CVC5_EXPORT Solver
    */
   void setOption(const std::string& option, const std::string& value) const;
 
+  void getScore(const Term& term) const;
+
   /**
    * Append \p symbol to the current list of universal variables.
    *

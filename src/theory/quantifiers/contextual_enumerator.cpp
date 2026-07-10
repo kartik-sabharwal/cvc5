@@ -36,10 +36,10 @@ void ContextualEnumerator::reset_round(CVC5_UNUSED Theory::Effort e) {}
 
 void ContextualEnumerator::check(CVC5_UNUSED Theory::Effort e, QEffort quant_e)
 {
-  if (d_switched_off)
-  {
-    return;
-  }
+  // if (d_switched_off)
+  // {
+  //   return;
+  // }
 
   if (quant_e == QEFFORT_STANDARD)
   {

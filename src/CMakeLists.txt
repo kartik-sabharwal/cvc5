@@ -329,6 +329,10 @@ libcvc5_add_sources(
   smt/expand_definitions.h
   smt/find_synth_solver.cpp
   smt/find_synth_solver.h
+  expr/e_match.cpp
+  expr/e_match.h
+  smt/get_score.cpp
+  smt/get_score.h
   smt/listeners.cpp
   smt/listeners.h
   smt/logic_exception.h

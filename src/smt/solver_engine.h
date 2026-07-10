@@ -331,6 +331,8 @@ class CVC5_EXPORT SolverEngine
    */
   void assertFormula(const Node& formula);
 
+  void getScore(Node& conjecture);
+
   /**
    * Assert a formula (if provided) to the current context and call
    * check().  Returns SAT, UNSAT, or UNKNOWN result.

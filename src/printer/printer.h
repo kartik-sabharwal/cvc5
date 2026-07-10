@@ -349,6 +349,9 @@ class CVC5_EXPORT Printer
                                       TypeNode locType,
                                       TypeNode dataType) const;
 
+  /** Get score command */
+  virtual void toStreamCmdGetScore(std::ostream& out, Node node) const;
+
  protected:
   /** Derived classes can construct, but no one else. */
   Printer() {}

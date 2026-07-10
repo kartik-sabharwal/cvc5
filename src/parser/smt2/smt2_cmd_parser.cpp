@@ -63,6 +63,7 @@ Smt2CmdParser::Smt2CmdParser(Smt2Lexer& lex,
   d_table["set-info"] = Token::SET_INFO_TOK;
   d_table["set-logic"] = Token::SET_LOGIC_TOK;
   d_table["set-option"] = Token::SET_OPTION_TOK;
+  d_table["get-score"] = Token::GET_SCORE_TOK;
   if (!d_lex.isStrict())
   {
     d_table["block-model"] = Token::BLOCK_MODEL_TOK;
@@ -140,6 +141,13 @@ std::unique_ptr<Cmd> Smt2CmdParser::parseNextCommand()
             namedTerm.first, namedTerm.second, true);
         Trace("parser") << "finished process top-level name" << std::endl;
       }
+    }
+    break;
+    case Token::GET_SCORE_TOK:
+    {
+      d_state.checkThatLogicIsSet();
+      Term term = d_tparser.parseTerm();
+      cmd.reset(new GetScoreCommand(term));
     }
     break;
     // sygus assume/constraint

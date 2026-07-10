@@ -12,6 +12,7 @@
 #include "smt/set_defaults.h"
 #include "theory/datatypes/sygus_datatype_utils.h"
 #include "theory/quantifiers/first_order_model.h"
+#include "theory/rewriter.h"
 #include "theory/smt_engine_subsolver.h"
 
 namespace cvc5::internal {
@@ -138,16 +139,9 @@ bool EnumerativeConjectureGenerator::needsCheck(Theory::Effort e)
 
 void EnumerativeConjectureGenerator::reset_round(Theory::Effort) {}
 
-void EnumerativeConjectureGenerator::updateClock(const QEffort qEffort,
-                                                 size_t& clock,
-                                                 const size_t period)
+void EnumerativeConjectureGenerator::updateClock(size_t& clock, const size_t period)
 {
-  if (qEffort == QEFFORT_STANDARD)
-  {
-    ++clock;
-
-    clock %= period;
-  }
+  clock = (clock + 1) % period;
 }
 
 bool EnumerativeConjectureGenerator::isSymbolRelevant(const TermDb* termDb,
@@ -649,7 +643,8 @@ std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScore(
   size_t tested = 0;
   size_t confirmed = 0;
 
-  Node conj = candidateToConjecture(nodeMgr, Candidate(lhs, rhs, 0, 0));
+  Node conj =
+      candidateToConjecture(nodeMgr, Candidate(lhs, rhs, 0, 0), nullptr);
 
   if (lhs == rhs || member(dedEnt, conj) || member(indEnt, conj))
   {
@@ -713,8 +708,6 @@ void EnumerativeConjectureGenerator::updateTypeToNumber(
 
 void EnumerativeConjectureGenerator::checkHelper()
 {
-  beginCallDebug();
-
   CVC5_UNUSED std::ostream& traceStream =
       Trace("enumerative-conjecture-generator");
 
@@ -800,9 +793,9 @@ void EnumerativeConjectureGenerator::checkHelper()
                    d_deductivelyEntailed,
                    options().quantifiers.ecgSubsolverTimeout,
                    *d_initialFacts,
-                   candIdx);
-
-  endCallDebug();
+                   candIdx,
+                   d_conjectures,
+                   d_qstate);
 }
 
 void EnumerativeConjectureGenerator::debugPrintLHSToSubstitutions(
@@ -865,20 +858,22 @@ void EnumerativeConjectureGenerator::debugPrintCandidateIndex(
 }
 
 void EnumerativeConjectureGenerator::debugPrintFacts(std::ostream& out,
-                                                     const Vector<TNode>& facts)
+                                                     const Set<TNode>& facts)
 {
   out << "Facts:" << std::endl;
 
-  for (CIt<Vector<TNode>> fact = facts.begin(); fact != facts.end(); ++fact)
+  for (CIt<Set<TNode>> fact = facts.begin(); fact != facts.end(); ++fact)
   {
     out << "* " << *fact << std::endl;
   }
 }
 
-std::vector<TNode> EnumerativeConjectureGenerator::getInitialFacts(
-    Valuation& valuation)
+std::unordered_set<TNode> EnumerativeConjectureGenerator::getInitialFacts(
+    Valuation& valuation, quantifiers::TermRegistry& termReg)
 {
-  Vector<TNode> result;
+  CVC5_UNUSED std::ostream& out = Trace("enumerative-conjecture-generator");
+
+  Set<TNode> result;
 
   for (CIt<context::CDList<Assertion>> assertion =
            valuation.factsBegin(THEORY_UF);
@@ -893,8 +888,87 @@ std::vector<TNode> EnumerativeConjectureGenerator::getInitialFacts(
 
       if (skolems.empty())
       {
-        result.push_back(*assertion);
+        result.insert(*assertion);
       }
+    }
+  }
+
+  quantifiers::FirstOrderModel* model = termReg.getModel();
+
+  for (size_t i = 0; i < model->getNumAssertedQuantifiers(); ++i)
+  {
+    const Node phi = model->getAssertedQuantifier(i);
+
+    const bool satLiteral = valuation.isSatLiteral(phi);
+    const bool fixed = satLiteral && valuation.isFixed(phi);
+
+    if (satLiteral && fixed)
+    {
+      result.insert(phi);
+    }
+    else if (satLiteral)
+    {
+      // out << "! sat literal " << phi
+      //     << " is not an initial fact because it is not fixed" << std::endl;
+    }
+    else
+    {
+      // out << "! " << phi
+      //     << " is not an initial fact because it is not a sat literal"
+      //     << std::endl;
+    }
+  }
+
+  return result;
+}
+
+std::unordered_set<TNode> EnumerativeConjectureGenerator::getProvedConjectures(
+    const Set<TNode>& conjectures,
+    const Valuation& valuation,
+    const quantifiers::TermRegistry& termReg)
+{
+  std::ostream& out = Trace("enumerative-conjecture-generator");
+
+  out << "getProvedConjectures current conjectures:" << std::endl;
+  for (CIt<Set<TNode>> conjIter = conjectures.begin(); conjIter != conjectures.end(); ++conjIter)
+  {
+    out << "* " << *conjIter << std::endl;
+  }
+
+  Set<TNode> result;
+
+  quantifiers::FirstOrderModel* model = termReg.getModel();
+
+  for (size_t i = 0; i < model->getNumAssertedQuantifiers(); ++i)
+  {
+    const Node phi = model->getAssertedQuantifier(i);
+
+    // valuation.isSatLiteral(phi) && valuation.isFixed(phi)
+
+    if (member(conjectures, TNode(phi)) && valuation.isSatLiteral(phi) && valuation.isFixed(phi))
+    {
+      result.insert(phi);
+      // out << "getProvedConjectures: fixed sat literal " << phi << " is a conjecture" << std::endl;
+    }
+    else if (valuation.isSatLiteral(phi) && valuation.isFixed(phi))
+    {
+      // out << "getProvedConjectures: fixed sat literal " << phi << " is not a conjecture" << std::endl;
+    }
+    else if (valuation.isSatLiteral(phi) && member(conjectures, TNode(phi)))
+    {
+      // out << "getProvedConjectures: sat literal " << phi << " is not fixed, but is a conjecture" << std::endl;
+    }
+    else if (member(conjectures, TNode(phi)))
+    {
+      // out << "getProvedConjectures: conjecture " << phi << " is not a sat literal" << std::endl;
+    }
+    else if (valuation.isSatLiteral(phi))
+    {
+      // out << "getProvedConjectures: sat literal " << phi << " is not a conjecture" << std::endl;
+    }
+    else
+    {
+      // out << "getProvedConjectures: " << phi << " is neither a sat literal nor a conjecture" << std::endl;
     }
   }
 
@@ -904,19 +978,33 @@ std::vector<TNode> EnumerativeConjectureGenerator::getInitialFacts(
 void EnumerativeConjectureGenerator::check(CVC5_UNUSED Theory::Effort effort,
                                            QEffort qEffort)
 {
+  beginCallDebug();
+
   if (!d_initialFacts)
   {
-    d_initialFacts = getInitialFacts(d_qstate.getValuation());
+    d_initialFacts = getInitialFacts(d_qstate.getValuation(), d_treg);
   }
+
+  const Set<TNode> provedConjectures =
+      getProvedConjectures(d_conjectures, d_qstate.getValuation(), d_treg);
+
+  Assert(d_initialFacts);
+
+  d_initialFacts->insert(provedConjectures.begin(), provedConjectures.end());
 
   debugPrintFacts(Trace("enumerative-conjecture-generator"), *d_initialFacts);
 
-  updateClock(qEffort, d_clock, d_period);
-
-  if (d_clock == 0)
+  if (qEffort == QEFFORT_STANDARD)
   {
-    checkHelper();
+    updateClock(d_clock, d_period);
+
+    if (d_clock == 0)
+    {
+      checkHelper();      
+    }
   }
+
+  endCallDebug();
 }
 
 size_t EnumerativeConjectureGenerator::underestimateSize(TNode n)
@@ -1412,19 +1500,20 @@ void EnumerativeConjectureGenerator::debugPrintAssertions(
 bool EnumerativeConjectureGenerator::isEntailed(
     Env& env,
     Options& defaultOpts,
-    quantifiers::TermRegistry& termReg,
+    CVC5_UNUSED quantifiers::TermRegistry& termReg,
     const Vector<Node>& extra,
     const bool induct,
     const size_t timeout,
-    const Vector<TNode>& initialFacts,
+    const Set<TNode>& initialFacts,
     TNode conj)
 {
   const bool instStrategyOn = TraceChannel.isOn("inst-strategy");
+  const bool quantifiersSkOn = TraceChannel.isOn("quantifiers-sk");
+  const bool instOn = TraceChannel.isOn("inst");
 
-  if (instStrategyOn)
-  {
-    TraceChannel.off("inst-strategy");
-  }
+  if (instStrategyOn) TraceChannel.off("inst-strategy");
+  if (quantifiersSkOn) TraceChannel.off("quantifiers-sk");
+  if (instOn) TraceChannel.off("inst");
 
   Ptr<SolverEngine> subsolver;
 
@@ -1444,20 +1533,26 @@ bool EnumerativeConjectureGenerator::isEntailed(
   initializeSubsolver(
       env.getNodeManager(), subsolver, setupInfo, true, timeout);
 
-  quantifiers::FirstOrderModel* model = termReg.getModel();
-
-  for (CIt<Vector<TNode>> assertion = initialFacts.begin();
+  for (CIt<Set<TNode>> assertion = initialFacts.begin();
        assertion != initialFacts.end();
        ++assertion)
   {
     subsolver->assertFormula(*assertion);
   }
 
-  for (size_t i = 0; i < model->getNumAssertedQuantifiers(); i++)
-  {
-    TNode phi = model->getAssertedQuantifier(i);
-    subsolver->assertFormula(phi);
-  }
+  /*
+  We comment out the following block because we do not want to rely on
+  quantified formulas that are at decision level 1 or higher when checking
+  whether a formula is entailed.
+  */
+
+  // quantifiers::FirstOrderModel* model = termReg.getModel();
+  //
+  // for (size_t i = 0; i < model->getNumAssertedQuantifiers(); i++)
+  // {
+  //   TNode phi = model->getAssertedQuantifier(i);
+  //   subsolver->assertFormula(phi);
+  // }
 
   for (CIt<Vector<Node>> phi = extra.begin(); phi != extra.end(); ++phi)
   {
@@ -1470,10 +1565,9 @@ bool EnumerativeConjectureGenerator::isEntailed(
 
   const Result result = subsolver->checkSat();
 
-  if (instStrategyOn)
-  {
-    TraceChannel.on("inst-strategy");
-  }
+  if (instStrategyOn) TraceChannel.on("inst-strategy");
+  if (quantifiersSkOn) TraceChannel.on("quantifiers-sk");
+  if (instOn) TraceChannel.on("inst");
 
   return result.getStatus() == Result::UNSAT;
 }
@@ -1487,16 +1581,20 @@ bool EnumerativeConjectureGenerator::filterConjecture(
     Vector<Node>& indEntBuf,
     Optional<std::int64_t>& fuel,
     const size_t timeout,
-    const Vector<TNode>& initialFacts,
-    TNode conj)
+    const Set<TNode>& initialFacts,
+    TNode conj,
+    const Set<TNode>& conjectures,
+    const TNode trueNode,
+    const quantifiers::QuantifiersState& quantifiersState)
 {
   FilterResult result = NONE;
 
-  if (conj[1][0] == conj[1][1])
+  if (quantifiersState.areEqual(conj, trueNode))
   {
     result = TRIVIAL;
   }
-  else if (member(indEnt, Node(conj)) || member(dedEnt, Node(conj)))
+  else if (member(indEnt, Node(conj)) || member(dedEnt, Node(conj))
+           || member(conjectures, conj))
   {
     result = CACHED;
   }
@@ -1534,8 +1632,8 @@ bool EnumerativeConjectureGenerator::filterConjecture(
     result = INDUCTIVE;
   }
 
-  // debugPrintFilterConjecture(Trace("enumerative-conjecture-generator"), conj,
-  // result);
+  // debugPrintFilterConjecture(
+  //     Trace("enumerative-conjecture-generator"), conj, result);
 
   return result == INDUCTIVE;
 }
@@ -1543,12 +1641,16 @@ bool EnumerativeConjectureGenerator::filterConjecture(
 void EnumerativeConjectureGenerator::assertConjecture(
     quantifiers::QuantifiersInferenceManager& quantInfMgr, TNode conj)
 {
+  Node lem = NodeManager::mkNode(Kind::OR, conj.negate(), conj);
+  Trace("enumerative-conjecture-generator")
+      << "* asserting " << lem << std::endl;
   quantInfMgr.addPendingLemma(
-      conj, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
+      lem, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
+  quantInfMgr.addPendingPhaseRequirement(conj, false);
 }
 
 Node EnumerativeConjectureGenerator::candidateToConjecture(
-    NodeManager* nodeMgr, const Candidate& cand)
+    NodeManager* nodeMgr, const Candidate& cand, theory::Rewriter* rewriter)
 {
   Node lhs = cand.d_left;
   Set<Node> vars;
@@ -1558,7 +1660,13 @@ Node EnumerativeConjectureGenerator::candidateToConjecture(
   Node rhs = cand.d_right;
   Assert(lhs.getType() == rhs.getType());
   Node eq = lhs.eqNode(rhs);
-  return nodeMgr->mkNode(Kind::FORALL, bvs, eq);
+  Node result = nodeMgr->mkNode(Kind::FORALL, bvs, eq);
+  if (rewriter != nullptr)
+  {
+    Node rewritten = rewriter->rewrite(result);
+    result = rewritten;
+  }
+  return result;
 }
 
 void EnumerativeConjectureGenerator::filterCandidates(
@@ -1571,8 +1679,10 @@ void EnumerativeConjectureGenerator::filterCandidates(
     Set<Node>& indEnt,
     Set<Node>& dedEnt,
     const size_t timeout,
-    const Vector<TNode>& initialFacts,
-    Vector<PriorityQueue<Candidate>>& candIdx)
+    const Set<TNode>& initialFacts,
+    Vector<PriorityQueue<Candidate>>& candIdx,
+    Set<TNode>& conjectures,
+    const quantifiers::QuantifiersState& quantifiersState)
 {
   Optional<std::int64_t> fuel(initialFuel);
 
@@ -1595,7 +1705,7 @@ void EnumerativeConjectureGenerator::filterCandidates(
 
       cands.pop();
 
-      Node conj = candidateToConjecture(nodeMgr, cand);
+      Node conj = candidateToConjecture(nodeMgr, cand, env.getRewriter());
 
       if (filterConjecture(env,
                            subsolverOpts,
@@ -1606,8 +1716,13 @@ void EnumerativeConjectureGenerator::filterCandidates(
                            fuel,
                            timeout,
                            initialFacts,
-                           conj))
+                           conj,
+                           conjectures,
+                           nodeMgr->mkConst(true),
+                           quantifiersState))
       {
+        conjectures.insert(conj);
+
         assertConjecture(quantInfMgr, conj);
 
         if (fuel && *fuel < 1)

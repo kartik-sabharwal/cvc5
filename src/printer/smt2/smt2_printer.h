@@ -302,6 +302,8 @@ class Smt2Printer : public cvc5::internal::Printer
                       int toDepth,
                       const LetBinding* lbind) const;
 
+  void toStreamCmdGetScore(std::ostream& out, Node node) const override;
+
   /**
    * Get the string for a kind k, which returns how the kind k is printed in
    * the SMT-LIB format.

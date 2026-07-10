@@ -2763,4 +2763,23 @@ void DatatypeDeclarationCommand::toStream(std::ostream& out) const
       out, sortVectorToTypeNodes(d_datatypes));
 }
 
+GetScoreCommand::GetScoreCommand(const cvc5::Term& term) : d_term(term) {}
+
+cvc5::Term GetScoreCommand::getTerm() const
+{
+  return d_term;
+}
+
+std::string GetScoreCommand::getCommandName() const { return "get-score"; }
+
+void GetScoreCommand::toStream(std::ostream& out) const
+{
+  internal::Printer::getPrinter(out)->toStreamCmdGetScore(out, termToNode(d_term));
+}
+
+void GetScoreCommand::invoke(cvc5::Solver* solver, CVC5_UNUSED SymManager* sm)
+{
+  solver->getScore(d_term);
+}
+
 }  // namespace cvc5::parser
