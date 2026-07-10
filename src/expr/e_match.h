@@ -8,6 +8,17 @@
 #include "theory/uf/equality_engine.h"
 
 namespace cvc5::internal {
+using std::ostream;
+using theory::eq::EqualityEngine;
+using theory::eq::EqClassIterator;
+typedef std::unordered_set<size_t> Positions;
+typedef std::vector<Node> Nodes;
+typedef std::pair<Node, Node> Job;
+typedef std::vector<Job> Jobs;
+typedef std::optional<Jobs> MaybeJobs;
+typedef std::optional<Subs> MaybeSubs;
+typedef std::unordered_map<size_t, Node> PositionToNode;
+
 class CandidateCallback
 {
  public:
@@ -22,7 +33,7 @@ class Pattern
   Pattern(Node pat,
           Node eqc,
           CandidateCallback* candCallback,
-          theory::eq::EqualityEngine* eqEng);
+          EqualityEngine* eqEng);
 
   /**
    * We want to find matches for this d_pat.  We assume that d_pat.getKind() is
@@ -34,7 +45,7 @@ class Pattern
   /**
    * We want to try matching d_pat against all these terms.
    */
-  std::vector<Node> d_cands;
+  Nodes d_cands;
 
   /**
    * When next() is called we will try to match d_pat with
@@ -45,12 +56,12 @@ class Pattern
   /**
    * i is in d_subPatPosns if and only if d_pat[i] is not a matchable variable.
    */
-  std::unordered_set<size_t> d_subPatPosns;
+  Positions d_subPatPosns;
 
   /**
    * i is in d_varPosns if and only if d_pat[i] is a matchable variable.
    */
-  std::unordered_set<size_t> d_varPosns;
+  Positions d_varPosns;
 
   /**
    * i is in d_boundPosns if and only if this Pattern object added a mapping
@@ -58,25 +69,26 @@ class Pattern
    * follows that this object should erase exactly those mappings during a call
    * to backtrack().
    */
-  std::unordered_set<size_t> d_boundPosns;
+  Positions d_boundPosns;
 
-  std::optional<std::vector<std::pair<Node, Node>>> next(
-      Subs& subs, theory::eq::EqualityEngine* eqEng);
+  MaybeJobs next(Subs& subs, EqualityEngine* eqEng);
 
   void backtrack(Subs& subs);
 
  private:
-  void debugPrintPosns(const std::unordered_set<size_t>& posns,
+  void debugPrintPosns(const Positions& posns,
                        const TNode& term,
-                       std::ostream& out);
+                       ostream& out);
 };
+
+typedef std::vector<std::unique_ptr<Pattern>> Patterns;
 
 class EMatch
 {
  public:
   EMatch(Node pat,
          CandidateCallback* candCallback,
-         theory::eq::EqualityEngine* eqEng);
+         EqualityEngine* eqEng);
 
   /**
    * The pattern that needs to be unified with the equivalence class d_eqc.
@@ -96,7 +108,7 @@ class EMatch
   /**
    * A pointer to an equality engine.
    */
-  theory::eq::EqualityEngine* d_eqEng;
+  EqualityEngine* d_eqEng;
 
   /**
    * The vector of non-variable sub-patterns of d_pat.
@@ -116,7 +128,7 @@ class EMatch
    * d_subPats[4] := Succ(Zero)
    * d_subPats[5] := Zero
    */
-  std::vector<std::unique_ptr<Pattern>> d_subPats;
+  Patterns d_subPats;
 
   /**
    * An e-matching attempt is successful when d_cursor is exactly
@@ -143,9 +155,9 @@ class EMatch
    * contains a substitution sigma.  sigma is a shallow copy of d_subs so sigma
    * and d_subs can be modified independently.
    */
-  std::optional<Subs> next();
+  MaybeSubs next();
 
-  void debugPrintState(std::ostream& out);
+  void debugPrintState(ostream& out);
 };
 }  // namespace cvc5::internal
 

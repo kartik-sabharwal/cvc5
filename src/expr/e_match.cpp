@@ -3,8 +3,7 @@
 #include "expr/node_algorithm.h"
 
 namespace cvc5::internal {
-std::ostream& operator<<(std::ostream& out,
-                         const std::unordered_set<size_t>& st)
+std::ostream& operator<<(ostream& out, const Positions& st)
 {
   out << "begin operator<<" << std::endl;
 
@@ -23,7 +22,7 @@ std::ostream& operator<<(std::ostream& out,
 Pattern::Pattern(Node pat,
                  Node eqc,
                  CandidateCallback* candCallback,
-                 theory::eq::EqualityEngine* eqEng)
+                 EqualityEngine* eqEng)
     : d_pat(pat),
       d_nextCandPosn(0),
       d_subPatPosns(),
@@ -35,7 +34,7 @@ Pattern::Pattern(Node pat,
 
   const Node op = pat.getOperator();
 
-  std::unordered_map<size_t, Node> posnToGround;
+  PositionToNode posnToGround;
 
   for (size_t posn = 0; posn != d_pat.getNumChildren(); ++posn)
   {
@@ -55,8 +54,7 @@ Pattern::Pattern(Node pat,
     }
   }
 
-  for (theory::eq::EqClassIterator termIter =
-           theory::eq::EqClassIterator(eqc, eqEng);
+  for (EqClassIterator termIter = EqClassIterator(eqc, eqEng);
        !termIter.isFinished();
        ++termIter)
   {
@@ -67,7 +65,7 @@ Pattern::Pattern(Node pat,
     {
       bool addToCands = true;
 
-      for (std::unordered_map<size_t, Node>::const_iterator entry =
+      for (PositionToNode::const_iterator entry =
                posnToGround.begin();
            entry != posnToGround.end();
            ++entry)
@@ -99,7 +97,7 @@ Pattern::Pattern(Node pat,
   // We want to inspect that the positions of all bound variables have been
   // recorded!
   {
-    std::ostream& out = Trace("e-match");
+    ostream& out = Trace("e-match");
     out << "Pattern {" << std::endl;
     out << "d_pat := " << d_pat << std::endl;
     out << "d_varPosns := ";
@@ -112,8 +110,7 @@ Pattern::Pattern(Node pat,
   }
 }
 
-std::optional<std::vector<std::pair<Node, Node>>> Pattern::next(
-    Subs& subs, theory::eq::EqualityEngine* eqEng)
+MaybeJobs Pattern::next(Subs& subs, EqualityEngine* eqEng)
 {
   for (; d_nextCandPosn != d_cands.size(); ++d_nextCandPosn)
   {
@@ -121,10 +118,9 @@ std::optional<std::vector<std::pair<Node, Node>>> Pattern::next(
 
     bool failure = false;
 
-    std::unordered_map<size_t, Node> newSubs;
+    PositionToNode newSubs;
 
-    for (std::unordered_set<size_t>::const_iterator posnIter =
-             d_varPosns.begin();
+    for (Positions::const_iterator posnIter = d_varPosns.begin();
          posnIter != d_varPosns.end();
          ++posnIter)
     {
@@ -151,10 +147,9 @@ std::optional<std::vector<std::pair<Node, Node>>> Pattern::next(
       continue;
     }
 
-    std::vector<std::pair<Node, Node>> newJobs;
+    Jobs newJobs;
 
-    for (std::unordered_set<size_t>::const_iterator posn =
-             d_subPatPosns.begin();
+    for (Positions::const_iterator posn = d_subPatPosns.begin();
          posn != d_subPatPosns.end();
          ++posn)
     {
@@ -163,8 +158,7 @@ std::optional<std::vector<std::pair<Node, Node>>> Pattern::next(
 
     ++d_nextCandPosn;
 
-    for (std::unordered_map<size_t, Node>::const_iterator entry =
-             newSubs.begin();
+    for (PositionToNode::const_iterator entry = newSubs.begin();
          entry != newSubs.end();
          ++entry)
     {
@@ -178,10 +172,11 @@ std::optional<std::vector<std::pair<Node, Node>>> Pattern::next(
     }
 
     {
-      std::ostream& out = Trace("e-match");
+      ostream& out = Trace("e-match");
       out << "Pattern::next for " << d_pat << " {" << std::endl;
-      typedef std::unordered_set<size_t>::const_iterator Position;
-      for (Position posn = d_varPosns.cbegin(); posn != d_varPosns.end(); ++posn)
+      for (Positions::const_iterator posn = d_varPosns.cbegin();
+           posn != d_varPosns.end();
+           ++posn)
       {
         const TNode& var = d_pat[*posn];
         out << "Child variable " << var;
@@ -197,16 +192,15 @@ std::optional<std::vector<std::pair<Node, Node>>> Pattern::next(
       out << "}" << std::endl;
     }
 
-    return std::optional<std::vector<std::pair<Node, Node>>>(newJobs);
+    return MaybeJobs(newJobs);
   }
 
-  return std::optional<std::vector<std::pair<Node, Node>>>();
+  return MaybeJobs();
 }
 
 void Pattern::backtrack(Subs& subs)
 {
-  for (std::unordered_set<size_t>::const_iterator boundPosn =
-           d_boundPosns.begin();
+  for (Positions::const_iterator boundPosn = d_boundPosns.begin();
        boundPosn != d_boundPosns.end();
        ++boundPosn)
   {
@@ -224,12 +218,11 @@ void Pattern::backtrack(Subs& subs)
   d_boundPosns.clear();
 }
 
-void Pattern::debugPrintPosns(const std::unordered_set<size_t>& posns, const TNode& term, std::ostream& out)
+void Pattern::debugPrintPosns(const Positions& posns, const TNode& term, ostream& out)
 {
-  typedef std::unordered_set<size_t>::const_iterator Position;
   out << "{";
-  Position posn = posns.cbegin();
-  const Position posnsEnd = posns.cend();
+  Positions::const_iterator posn = posns.cbegin();
+  const Positions::const_iterator posnsEnd = posns.cend();
   if (posn != posnsEnd)
   {
     out << *posn << " = " << term[*posn];
@@ -245,7 +238,7 @@ void Pattern::debugPrintPosns(const std::unordered_set<size_t>& posns, const TNo
 
 EMatch::EMatch(Node pat,
                CandidateCallback* candCallback,
-               theory::eq::EqualityEngine* eqEng)
+               EqualityEngine* eqEng)
     : d_pat(pat),
       d_eqc(Node::null()),
       d_candCallback(candCallback),
@@ -272,22 +265,20 @@ void EMatch::backtrack()
   d_subPats[d_cursor]->backtrack(d_subs);
 }
 
-std::optional<Subs> EMatch::next()
+MaybeSubs EMatch::next()
 {
-  std::optional<Subs> result;
+  MaybeSubs result;
 
   debugPrintState(Trace("e-match"));
   Trace("e-match") << std::endl;
 
   while (d_cursor < d_subPats.size())
   {
-    std::optional<std::vector<std::pair<Node, Node>>> newJobs =
-        d_subPats[d_cursor]->next(d_subs, d_eqEng);
+    MaybeJobs newJobs = d_subPats[d_cursor]->next(d_subs, d_eqEng);
 
     if (newJobs)
     {
-      for (std::vector<std::pair<Node, Node>>::const_iterator entry =
-               newJobs->begin();
+      for (Jobs::const_iterator entry = newJobs->begin();
            entry != newJobs->end();
            ++entry)
       {
@@ -333,7 +324,7 @@ std::optional<Subs> EMatch::next()
   return result;
 }
 
-void EMatch::debugPrintState(std::ostream& out)
+void EMatch::debugPrintState(ostream& out)
 {
   out << "[";
   if (!d_subPats.empty())
