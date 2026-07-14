@@ -148,6 +148,23 @@ class QuantifiersEngine : protected EnvObj
   void declareOracleFun(Node f);
   /** Get the list of all declared oracle functions */
   std::vector<Node> getOracleFuns() const;
+  /** get entailed term
+   *
+   * Suppose you have a term s that isn't the equality engine.  This function
+   * returns a term t from the equality engine that is equivalent to s.  If it
+   * can't it returns the null node.
+   */
+  Node getEntailedTerm(TNode n) const;
+  /** get equality engine
+   *
+   * Get the equality engine accessible to this object.
+   */
+  eq::EqualityEngine* getEqualityEngine() const;
+  /** is term active
+   *
+   * Exposes d_treg.getTermDatabase()->isTermActive(n)
+   */
+  bool isTermActive(TNode n) const;
   //----------end user interface for instantiations
  private:
   /**

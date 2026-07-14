@@ -951,13 +951,12 @@ void SolverEngine::assertFormula(const Node& formula)
 
 void SolverEngine::getScore(Node& conjecture)
 {
-  theory::TrustSubstitutionMap& topLvlSubs =
-      d_env->getTopLevelSubstitutions();
+  theory::TrustSubstitutionMap& topLvlSubs = d_env->getTopLevelSubstitutions();
 
   const Node newConjecture = topLvlSubs.apply(conjecture);
 
   std::tuple<uint64_t, uint64_t, uint64_t> score =
-      getScoreInternal(newConjecture, getAvailableModel("get-score"));
+      getScoreInternal(newConjecture, getAvailableQuantifiersEngine("get-score"));
 
   std::cout << std::get<0>(score) << " confirmed / ";
   std::cout << std::get<1>(score) << " tested / ";

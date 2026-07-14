@@ -850,6 +850,17 @@ std::vector<Node> QuantifiersEngine::getOracleFuns() const
   }
   return d_qmodules->d_oracleEngine->getOracleFuns();
 }
-
+Node QuantifiersEngine::getEntailedTerm(TNode n) const
+{
+  return d_treg.getEntailmentCheck()->getEntailedTerm(n);
+}
+eq::EqualityEngine* QuantifiersEngine::getEqualityEngine() const
+{
+  return d_qstate.getEqualityEngine();
+}
+bool QuantifiersEngine::isTermActive(TNode n) const
+{
+  return d_treg.getTermDatabase()->isTermActive(n);
+}
 }  // namespace theory
 }  // namespace cvc5::internal

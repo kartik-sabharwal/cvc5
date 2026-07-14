@@ -5,320 +5,303 @@
 namespace cvc5::internal {
 std::ostream& operator<<(ostream& out, const Positions& st)
 {
-  out << "begin operator<<" << std::endl;
-
   out << "{";
   for (const size_t elem : st)
   {
     out << " " << elem;
   }
   out << " }";
-
-  out << "end operator<<" << std::endl;
-
   return out;
 }
 
-Pattern::Pattern(Node pat,
-                 Node eqc,
-                 CandidateCallback* candCallback,
-                 EqualityEngine* eqEng)
+Pattern::Pattern(Node pat)
     : d_pat(pat),
+      d_cands(),
       d_nextCandPosn(0),
       d_subPatPosns(),
       d_varPosns(),
-      d_boundPosns()
-
+      d_groundPosns(),
+      d_boundPosns(),
+      d_subPatIdxs()
 {
-  Assert(d_pat.hasOperator());
+  populateSubPatVarGroundPosns();
+}
 
-  const Node op = pat.getOperator();
-
-  PositionToNode posnToGround;
-
-  for (size_t posn = 0; posn != d_pat.getNumChildren(); ++posn)
+void Pattern::populateSubPatVarGroundPosns()
+{
+  for (size_t i = 0; i < d_pat.getNumChildren(); ++i)
   {
-    Node child = d_pat[posn];
+    const Node child = d_pat[i];
 
     if (child.getKind() == Kind::BOUND_VARIABLE)
     {
-      d_varPosns.insert(posn);
+      d_varPosns.push_back(i);
     }
     else if (expr::hasBoundVar(child))
     {
-      d_subPatPosns.insert(posn);
+      d_subPatPosns.push_back(i);
     }
     else
     {
-      posnToGround[posn] = child;
+      d_groundPosns.push_back(i);
     }
-  }
-
-  for (EqClassIterator termIter = EqClassIterator(eqc, eqEng);
-       !termIter.isFinished();
-       ++termIter)
-  {
-    const Node term = *termIter;
-
-    if (term.hasOperator() && term.getOperator() == op
-        && candCallback->consider(term))
-    {
-      bool addToCands = true;
-
-      for (PositionToNode::const_iterator entry =
-               posnToGround.begin();
-           entry != posnToGround.end();
-           ++entry)
-      {
-        const Node termChild = term[std::get<0>(*entry)];
-        const Node patChild = std::get<1>(*entry);
-
-        Assert(eqEng->hasTerm(termChild));
-
-        if (!eqEng->hasTerm(patChild))
-        {
-          Assert(termChild != patChild);
-
-          addToCands = false;
-        }
-        else if (eqEng->areDisequal(termChild, patChild, false))
-        {
-          addToCands = false;
-        }
-      }
-
-      if (addToCands)
-      {
-        d_cands.push_back(term);
-      }
-    }
-  }
-
-  // We want to inspect that the positions of all bound variables have been
-  // recorded!
-  {
-    ostream& out = Trace("e-match");
-    out << "Pattern {" << std::endl;
-    out << "d_pat := " << d_pat << std::endl;
-    out << "d_varPosns := ";
-    debugPrintPosns(d_varPosns, d_pat, out);
-    out << std::endl;
-    out << "d_subPatPosns := ";
-    debugPrintPosns(d_subPatPosns, d_pat, out);
-    out << std::endl;
-    out << "}" << std::endl;
   }
 }
 
-MaybeJobs Pattern::next(Subs& subs, EqualityEngine* eqEng)
+void Pattern::reset(const Node eqc,
+                    CandidateCallback* callback,
+                    EqualityEngine* ee)
+{
+  populateCands(eqc, callback, ee);
+
+  d_nextCandPosn = 0;
+
+  d_boundPosns.clear();
+}
+
+void Pattern::populateCands(const Node eqc,
+                            CandidateCallback* callback,
+                            EqualityEngine* ee)
+{
+  d_cands.clear();
+
+  for (EqClassIterator termI = EqClassIterator(eqc, ee); !termI.isFinished();
+       ++termI)
+  {
+    const Node term = *termI;
+
+    if (term.hasOperator() && term.getOperator() == d_pat.getOperator()
+        && callback->consider(term) && checkGroundPosns(term, ee))
+    {
+      d_cands.push_back(term);
+    }
+  }
+}
+
+bool Pattern::checkGroundPosns(const Node term, EqualityEngine* ee)
+{
+  for (Positions::const_iterator posnI = d_groundPosns.cbegin();
+       posnI != d_groundPosns.cend();
+       ++posnI)
+  {
+    const size_t posn = *posnI;
+    const Node termChild = term[posn];
+    const Node patChild = d_pat[posn];
+
+    if (ee->hasTerm(patChild) && ee->areEqual(patChild, termChild))
+    {
+      continue;
+    }
+    else
+    {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+MaybeJobs Pattern::next(Subs& subs, EqualityEngine* ee)
 {
   for (; d_nextCandPosn != d_cands.size(); ++d_nextCandPosn)
   {
     const Node cand = d_cands[d_nextCandPosn];
 
-    bool failure = false;
+    MaybePositionToNode mappings = getMappings(cand, subs, ee);
 
-    PositionToNode newSubs;
-
-    for (Positions::const_iterator posnIter = d_varPosns.begin();
-         posnIter != d_varPosns.end();
-         ++posnIter)
+    if (mappings)
     {
-      const size_t posn = *posnIter;
-      const Node var = d_pat[posn];
-      const Node img = cand[posn];
-      const bool inSubs = subs.contains(var);
-      const bool inNewSubs = newSubs.find(posn) != newSubs.end();
+      commitMappings(*mappings, subs);
 
-      if ((inSubs && eqEng->areDisequal(subs.getSubs(var), img, false))
-          || (inNewSubs && eqEng->areDisequal(newSubs[posn], img, false)))
-      {
-        failure = true;
-        break;
-      }
-      else if (!inSubs && !inNewSubs)
-      {
-        newSubs[posn] = img;
-      }
+      Jobs newJobs = getNewJobs(cand, ee);
+
+      ++d_nextCandPosn;
+
+      return MaybeJobs(newJobs);
     }
-
-    if (failure)
-    {
-      continue;
-    }
-
-    Jobs newJobs;
-
-    for (Positions::const_iterator posn = d_subPatPosns.begin();
-         posn != d_subPatPosns.end();
-         ++posn)
-    {
-      newJobs.emplace_back(d_pat[*posn], eqEng->getRepresentative(cand[*posn]));
-    }
-
-    ++d_nextCandPosn;
-
-    for (PositionToNode::const_iterator entry = newSubs.begin();
-         entry != newSubs.end();
-         ++entry)
-    {
-      const size_t boundPosn = std::get<0>(*entry);
-
-      const Node img = std::get<1>(*entry);
-
-      subs.add(d_pat[boundPosn], std::get<1>(*entry));
-
-      d_boundPosns.insert(boundPosn);
-    }
-
-    {
-      ostream& out = Trace("e-match");
-      out << "Pattern::next for " << d_pat << " {" << std::endl;
-      for (Positions::const_iterator posn = d_varPosns.cbegin();
-           posn != d_varPosns.end();
-           ++posn)
-      {
-        const TNode& var = d_pat[*posn];
-        out << "Child variable " << var;
-        if (subs.contains(var))
-        {
-          out << " bound." << std::endl;
-        }
-        else
-        {
-          out << " unbound!" << std::endl;
-        }
-      }
-      out << "}" << std::endl;
-    }
-
-    return MaybeJobs(newJobs);
   }
 
   return MaybeJobs();
 }
 
+MaybePositionToNode Pattern::getMappings(const Node cand,
+                                         Subs& subs,
+                                         EqualityEngine* ee)
+{
+  PositionToNode mappings;
+
+  for (Positions::const_iterator posnI = d_varPosns.begin();
+       posnI != d_varPosns.end();
+       ++posnI)
+  {
+    const size_t posn = *posnI;
+
+    const Node var = d_pat[posn];
+    const Node img = cand[posn];
+
+    const bool varInSubs = subs.contains(var);
+    const bool varInMappings = mappings.find(posn) != mappings.end();
+
+    if ((varInSubs && ee->areDisequal(subs.getSubs(var), img, false))
+        || (varInMappings && ee->areDisequal(mappings.at(posn), img, false)))
+    {
+      return MaybePositionToNode();
+    }
+    else if (!varInSubs && !varInMappings)
+    {
+      mappings[posn] = img;
+    }
+  }
+
+  return MaybePositionToNode(mappings);
+}
+
+void Pattern::commitMappings(const PositionToNode& mappings, Subs& subs)
+{
+  for (PositionToNode::const_iterator entry = mappings.begin();
+       entry != mappings.end();
+       ++entry)
+  {
+    const size_t boundPosn = std::get<0>(*entry);
+    const Node img = std::get<1>(*entry);
+
+    subs.add(d_pat[boundPosn], img);
+
+    d_boundPosns.push_back(boundPosn);
+  }
+}
+
+Jobs Pattern::getNewJobs(const Node cand, EqualityEngine* ee)
+{
+  Jobs result;
+
+  for (size_t i = 0; i < d_subPatPosns.size(); ++i)
+  {
+    const size_t jobIdx = d_subPatIdxs[i];
+    const Node jobEqc = ee->getRepresentative(cand[d_subPatPosns[i]]);
+    result.emplace_back(jobIdx, jobEqc);
+  }
+
+  return result;
+}
+
+void Pattern::addChildren(Patterns& subPats)
+{
+  for (Positions::const_iterator posnI = d_subPatPosns.cbegin();
+       posnI != d_subPatPosns.cend();
+       ++posnI)
+  {
+    const size_t posn = *posnI;
+    const Node subPat = d_pat[posn];
+    d_subPatIdxs.push_back(subPats.size());
+    subPats.emplace_back(new Pattern(subPat));
+  }
+}
+
 void Pattern::backtrack(Subs& subs)
 {
-  for (Positions::const_iterator boundPosn = d_boundPosns.begin();
-       boundPosn != d_boundPosns.end();
-       ++boundPosn)
+  for (Positions::const_iterator posnI = d_boundPosns.cbegin();
+       posnI != d_boundPosns.cend();
+       ++posnI)
   {
-    const size_t boundPosnValue = *boundPosn;
-
-    Assert(boundPosnValue < d_pat.getNumChildren());
-
-    const Node var = d_pat[boundPosnValue];
-
-    Assert(subs.contains(var));
-
-    subs.erase(d_pat[*boundPosn]);
+    subs.erase(d_pat[*posnI]);
   }
 
   d_boundPosns.clear();
 }
 
-void Pattern::debugPrintPosns(const Positions& posns, const TNode& term, ostream& out)
+void Pattern::debugPrintPosns(const Positions& posns,
+                              const TNode& term,
+                              ostream& out)
 {
   out << "{";
-  Positions::const_iterator posn = posns.cbegin();
-  const Positions::const_iterator posnsEnd = posns.cend();
-  if (posn != posnsEnd)
+  Positions::const_iterator posnI = posns.cbegin();
+  if (posnI != posns.cend())
   {
-    out << *posn << " = " << term[*posn];
-
-    ++posn;
+    const size_t posn = *posnI;
+    out << posn << " = " << term[posn];
+    ++posnI;
   }
-  for (; posn != posnsEnd; ++posn)
+  for (; posnI != posns.cend(); ++posnI)
   {
-    out << ", " << *posn << " = " << term[*posn];
+    const size_t posn = *posnI;
+    out << ", " << posn << " = " << term[posn];
   }
   out << "}";
 }
 
-EMatch::EMatch(Node pat,
-               CandidateCallback* candCallback,
-               EqualityEngine* eqEng)
-    : d_pat(pat),
-      d_eqc(Node::null()),
-      d_candCallback(candCallback),
-      d_eqEng(eqEng)
+EMatch::EMatch(Node pat, CandidateCallback* callback, EqualityEngine* ee)
+    : d_pat(pat), d_eqc(Node::null()), d_callback(callback), d_ee(ee)
 {
+  populateSubPats();
+}
+
+void EMatch::populateSubPats()
+{
+  d_subPats.emplace_back(new Pattern(d_pat));
+
+  size_t i = 0;
+
+  while (i < d_subPats.size())
+  {
+    d_subPats.at(i)->addChildren(d_subPats);
+
+    ++i;
+  }
 }
 
 void EMatch::reset(Node eqc)
 {
+  
+
   d_eqc = eqc;
 
-  d_subPats.clear();
-  d_subPats.emplace_back(new Pattern(d_pat, d_eqc, d_candCallback, d_eqEng));
+  d_subPats.at(0)->reset(eqc, d_callback, d_ee);
 
   d_cursor = 0;
 
   d_subs.clear();
 }
 
-void EMatch::backtrack()
-{
-  --d_cursor;
-
-  d_subPats[d_cursor]->backtrack(d_subs);
-}
-
 MaybeSubs EMatch::next()
 {
-  MaybeSubs result;
-
-  debugPrintState(Trace("e-match"));
-  Trace("e-match") << std::endl;
-
   while (d_cursor < d_subPats.size())
   {
-    MaybeJobs newJobs = d_subPats[d_cursor]->next(d_subs, d_eqEng);
+    MaybeJobs jobs = d_subPats.at(d_cursor)->next(d_subs, d_ee);
 
-    if (newJobs)
+    if (jobs)
     {
-      for (Jobs::const_iterator entry = newJobs->begin();
-           entry != newJobs->end();
+      ++d_cursor;
+
+      for (Jobs::const_iterator entry = jobs->cbegin(); entry != jobs->cend();
            ++entry)
       {
-        const Node pat = std::get<0>(*entry);
+        const size_t idx = std::get<0>(*entry);
         const Node eqc = std::get<1>(*entry);
-        d_subPats.emplace_back(new Pattern(pat, eqc, d_candCallback, d_eqEng));
+        d_subPats.at(idx)->reset(eqc, d_callback, d_ee);
       }
+    }
+    else if (d_cursor > 0)
+    {
+      --d_cursor;
 
-      ++d_cursor;
+      d_subPats.at(d_cursor)->backtrack(d_subs);
     }
     else
     {
-      for (CVC5_UNUSED size_t i = d_cursor; d_cursor < d_subPats.size(); ++i)
-      {
-        d_subPats.pop_back();
-      }
-
-      if (d_cursor > 0)
-      {
-        backtrack();
-      }
+      break;
     }
-
-    debugPrintState(Trace("e-match"));
-    Trace("e-match") << std::endl;
   }
 
-  Assert(d_cursor == d_subPats.size());
+  MaybeSubs result;
 
   if (d_cursor > 0)
   {
-    result = d_subs;
+    result = MaybeSubs(d_subs);
 
-    Trace("e-match") << "EMatch::next {" << std::endl;
-    Trace("e-match") << "Before backtrack(), result := " << result << std::endl;
+    --d_cursor;
 
-    backtrack();
-
-    Trace("e-match") << "After backtrack(), result := " << result << std::endl;
-    Trace("e-match") << "}" << std::endl;
+    d_subPats.at(d_cursor)->backtrack(d_subs);
   }
 
   return result;
@@ -326,22 +309,43 @@ MaybeSubs EMatch::next()
 
 void EMatch::debugPrintState(ostream& out)
 {
+  out << "EMatch::debugPrintState {" << std::endl;
+
   out << "[";
+
   if (!d_subPats.empty())
   {
-    if (d_cursor == 0) out << "!";
+    if (d_cursor == 0)
+    {
+      out << "!";
+    }
 
     out << d_subPats[0]->d_pat;
   }
+
   for (size_t i = 1; i < d_subPats.size(); ++i)
   {
     out << ", ";
 
-    if (d_cursor == i) out << "!";
+    if (d_cursor == i)
+    {
+      out << "!";
+    }
 
     out << d_subPats[i]->d_pat;
   }
+
   out << "]";
-  if (d_cursor == d_subPats.size()) out << "!";
+
+  if (d_cursor == d_subPats.size())
+  {
+    out << "!";
+  }
+
+  out << std::endl;
+
+  out << d_subs << std::endl;
+
+  out << "}" << std::endl;
 }
 }  // namespace cvc5::internal

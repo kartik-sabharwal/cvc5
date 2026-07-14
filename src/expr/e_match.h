@@ -8,32 +8,37 @@
 #include "theory/uf/equality_engine.h"
 
 namespace cvc5::internal {
+class Pattern;
+
 using std::ostream;
-using theory::eq::EqualityEngine;
 using theory::eq::EqClassIterator;
-typedef std::unordered_set<size_t> Positions;
+using theory::eq::EqualityEngine;
+typedef std::vector<size_t> Positions;
+typedef std::vector<size_t> Indices;
 typedef std::vector<Node> Nodes;
-typedef std::pair<Node, Node> Job;
+typedef std::pair<size_t, Node> Job;
 typedef std::vector<Job> Jobs;
 typedef std::optional<Jobs> MaybeJobs;
 typedef std::optional<Subs> MaybeSubs;
 typedef std::unordered_map<size_t, Node> PositionToNode;
+typedef std::optional<PositionToNode> MaybePositionToNode;
+typedef std::vector<std::unique_ptr<Pattern>> Patterns;
+typedef std::vector<size_t> PositionToIndex;
 
 class CandidateCallback
 {
  public:
   CandidateCallback() {}
   virtual ~CandidateCallback() {}
-  virtual bool consider(Node cand) = 0;
+  virtual bool consider(TNode cand) = 0;
 };
 
 class Pattern
 {
  public:
-  Pattern(Node pat,
-          Node eqc,
-          CandidateCallback* candCallback,
-          EqualityEngine* eqEng);
+  /**********
+   * Fields *
+   **********/
 
   /**
    * We want to find matches for this d_pat.  We assume that d_pat.getKind() is
@@ -54,7 +59,8 @@ class Pattern
   size_t d_nextCandPosn;
 
   /**
-   * i is in d_subPatPosns if and only if d_pat[i] is not a matchable variable.
+   * i is in d_subPatPosns if and only if d_pat[i] has a matchable variable as a
+   * proper subterm.
    */
   Positions d_subPatPosns;
 
@@ -64,75 +70,98 @@ class Pattern
   Positions d_varPosns;
 
   /**
-   * i is in d_boundPosns if and only if this Pattern object added a mapping
-   * for d_pat[i] to its owner's d_subs field during a call to next().  It
-   * follows that this object should erase exactly those mappings during a call
-   * to backtrack().
+   * i is in d_groundPosns if and only if d_pat[i] is not a matchable variable
+   * and does not contain a matchable variable as a proper subterm.
+   */
+  Positions d_groundPosns;
+
+  /**
+   * i is in d_boundPosns if and only if this Pattern object has added a mapping
+   * for d_pat[i] to its owner's d_subs.
    */
   Positions d_boundPosns;
 
-  MaybeJobs next(Subs& subs, EqualityEngine* eqEng);
+  /**
+   * Let `ematch` denote the EMatch object that owns this Pattern object.
+   *
+   * For all values of i between 0 and (d_subPatPosns.size() - 1), inclusive,
+   * we require that ematch.d_subPats[d_subPatIdxs[i]] is a pointer to
+   * the Pattern object for d_pat[d_subPatPosns[i]].
+   */
+  Indices d_subPatIdxs;
+
+  /*************
+   * Functions *
+   *************/
+
+  /* Pattern & helpers */
+  Pattern(Node pat);
+
+  void populateSubPatVarGroundPosns();
+  /*********************/
+
+  /* reset & helpers */
+  void reset(const Node eqc, CandidateCallback* callback, EqualityEngine* ee);
+
+  void populateCands(const Node eqc, CandidateCallback* callback, EqualityEngine* ee);
+
+  bool checkGroundPosns(const Node term, EqualityEngine* ee);
+  /*******************/
+
+  /* next & helpers */
+  MaybeJobs next(Subs& subs, EqualityEngine* ee);
+
+  MaybePositionToNode getMappings(const Node cand, Subs& subs, EqualityEngine* ee);
+
+  void commitMappings(const PositionToNode& mappings, Subs& subs);
+
+  Jobs getNewJobs(const Node cand, EqualityEngine* ee);
+  /******************/
+
+  /* Other */
+  void addChildren(Patterns& subPats);
 
   void backtrack(Subs& subs);
 
- private:
-  void debugPrintPosns(const Positions& posns,
-                       const TNode& term,
-                       ostream& out);
+  static void debugPrintPosns(const Positions& posns, const TNode& term, ostream& out);
+  /*********/
 };
-
-typedef std::vector<std::unique_ptr<Pattern>> Patterns;
 
 class EMatch
 {
  public:
-  EMatch(Node pat,
-         CandidateCallback* candCallback,
-         EqualityEngine* eqEng);
+  EMatch(Node pat, CandidateCallback* callback, EqualityEngine* ee);
 
   /**
-   * The pattern that needs to be unified with the equivalence class d_eqc.
+   * We want to produce substitutions `sigma` such that `sigma` applied to
+   * `d_pat` is equivalent to `d_eqc`.  The image of `d_pat` under `sigma`
+   * is not guaranteed to be in the equality engine.
    */
   Node d_pat;
-
-  /**
-   * The equivalence class to match d_pat with.
-   */
   Node d_eqc;
 
   /**
-   * We will skip any candidate for which the following callback returns false.
+   * We will not use members of `d_eqc` for which d_candCallback.consider()
+   * returns false.
    */
-  CandidateCallback* d_candCallback;
+  CandidateCallback* d_callback;
+
+  EqualityEngine* d_ee;
 
   /**
-   * A pointer to an equality engine.
-   */
-  EqualityEngine* d_eqEng;
-
-  /**
-   * The vector of non-variable sub-patterns of d_pat.
+   * The sub-patterns of `d_pat`.
    *
-   * We build this vector such that if the (non-variable) sub-pattern p appears
-   * before the sub-pattern p' in a breadth-first traversal of d_pat then p
-   * appears before p' in d_subPats.
+   * The i th sub-pattern of `d_pat` that appears in a left-to-right
+   * breadth-first traversal of `d_pat` will be placed at index i.
    *
-   * For example, if d_pat is plus(times(X, plus(Succ(Zero), Y)), times(X, Z))
-   * is a pattern with matchable variables X, Y and Z, then at some point in the
-   * e-matching process d_subPats might look like:
-   *
-   * d_subPats[0] := plus(times(X, plus(Succ(Zero), Y)), times(X, Z))
-   * d_subPats[1] := times(X, plus(Succ(Zero)))
-   * d_subPats[2] := times(X, Z)
-   * d_subPats[3] := plus(Succ(Zero))
-   * d_subPats[4] := Succ(Zero)
-   * d_subPats[5] := Zero
+   * d_pat == d_subPats.at(0)
    */
   Patterns d_subPats;
 
   /**
-   * An e-matching attempt is successful when d_cursor is exactly
-   * d_subPats.size().
+   * d_cursor starts at 0 and is incremented when the matching task at
+   * d_subPats[d_cursor] is successful.  When d_cursor equals d_subPats.size()
+   * it means our e-matching attempt has succeeded.
    */
   size_t d_cursor;
 
@@ -142,22 +171,21 @@ class EMatch
   Subs d_subs;
 
   /**
-   * Resets to the initial state trying to match d_pat with eqc.  Needless to
-   * say, sets d_eqc to eqc.
+   * Sets up this object to match `d_pat` with `eqc`.
    */
   void reset(Node eqc);
 
-  void backtrack();
-
   /**
    * Returns an empty optional if and only if there are no more substitutions
-   * that make d_pat equivalent to d_eqc.  Otherwise returns an optional that
-   * contains a substitution sigma.  sigma is a shallow copy of d_subs so sigma
-   * and d_subs can be modified independently.
+   * that make `d_pat` equivalent to `d_eqc`.  Otherwise returns an optional
+   * that contains a substitution `sigma` such that `sigma` applied to `d_pat`
+   * is equivalent to `d_eqc`.
    */
   MaybeSubs next();
 
   void debugPrintState(ostream& out);
+
+  void populateSubPats();
 };
 }  // namespace cvc5::internal
 
