@@ -88,7 +88,11 @@ bool Pattern::checkGroundPosns(const Node term, EqualityEngine* ee)
     const Node termChild = term[posn];
     const Node patChild = d_pat[posn];
 
-    if (ee->hasTerm(patChild) && ee->areEqual(patChild, termChild))
+    if (ee->hasTerm(patChild) && ee->hasTerm(termChild) && ee->areEqual(patChild, termChild))
+    {
+      continue;
+    }
+    else if (patChild == termChild)
     {
       continue;
     }
@@ -142,8 +146,12 @@ MaybePositionToNode Pattern::getMappings(const Node cand,
     const bool varInSubs = subs.contains(var);
     const bool varInMappings = mappings.find(posn) != mappings.end();
 
-    if ((varInSubs && ee->areDisequal(subs.getSubs(var), img, false))
-        || (varInMappings && ee->areDisequal(mappings.at(posn), img, false)))
+    Assert(varInSubs ? ee->hasTerm(subs.getSubs(var)) : true);
+    Assert(varInMappings ? ee->hasTerm(mappings.at(posn)) : true);
+    Assert(ee->hasTerm(img));
+
+    if ((varInSubs && !ee->areEqual(subs.getSubs(var), img))
+        || (varInMappings && !ee->areEqual(mappings.at(posn), img)))
     {
       return MaybePositionToNode();
     }
@@ -252,8 +260,6 @@ void EMatch::populateSubPats()
 
 void EMatch::reset(Node eqc)
 {
-  
-
   d_eqc = eqc;
 
   d_subPats.at(0)->reset(eqc, d_callback, d_ee);
@@ -267,6 +273,8 @@ MaybeSubs EMatch::next()
 {
   while (d_cursor < d_subPats.size())
   {
+    debugPrintState(Trace("e-match"));
+
     MaybeJobs jobs = d_subPats.at(d_cursor)->next(d_subs, d_ee);
 
     if (jobs)
@@ -293,6 +301,8 @@ MaybeSubs EMatch::next()
     }
   }
 
+  debugPrintState(Trace("e-match"));
+
   MaybeSubs result;
 
   if (d_cursor > 0)
@@ -307,45 +317,50 @@ MaybeSubs EMatch::next()
   return result;
 }
 
+void EMatch::debugPrintCandidate(const size_t patternPosition, ostream& out)
+{
+  const size_t nextCandidatePosition = d_subPats[patternPosition]->d_nextCandPosn;
+
+  if (nextCandidatePosition == 0)
+  {
+    out << "X";
+  }
+  else
+  {
+    out << d_subPats[patternPosition]->d_cands[nextCandidatePosition - 1];
+  }
+}
+
 void EMatch::debugPrintState(ostream& out)
 {
   out << "EMatch::debugPrintState {" << std::endl;
-
   out << "[";
-
   if (!d_subPats.empty())
   {
     if (d_cursor == 0)
     {
       out << "!";
     }
-
-    out << d_subPats[0]->d_pat;
+    out << d_subPats[0]->d_pat << " with "; 
+    debugPrintCandidate(0, out);
   }
-
   for (size_t i = 1; i < d_subPats.size(); ++i)
   {
     out << ", ";
-
     if (d_cursor == i)
     {
       out << "!";
     }
-
-    out << d_subPats[i]->d_pat;
+    out << d_subPats[i]->d_pat << " with ";
+    debugPrintCandidate(i, out);
   }
-
   out << "]";
-
   if (d_cursor == d_subPats.size())
   {
     out << "!";
   }
-
   out << std::endl;
-
   out << d_subs << std::endl;
-
   out << "}" << std::endl;
 }
 }  // namespace cvc5::internal

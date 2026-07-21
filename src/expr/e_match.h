@@ -185,6 +185,8 @@ class EMatch
 
   void debugPrintState(ostream& out);
 
+  void debugPrintCandidate(const size_t patternPosition, ostream& out);
+
   void populateSubPats();
 };
 }  // namespace cvc5::internal

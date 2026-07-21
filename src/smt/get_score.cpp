@@ -75,7 +75,7 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
   {
     const TNode eqc = *eqcI;
 
-    if (eqc.getType() == lhsType && eqc.isConst())
+    if (eqc.getType() == lhsType /* && eqc.isConst() */)
     {
       bool confirmedOnOneSubs = false;
 
@@ -84,11 +84,21 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
       for (std::optional<Subs> sigma = ematch.next(); sigma;
            sigma = ematch.next())
       {
+        Trace("get-score-success")
+            << "LHS " << lhs << " is in " << eqc << " under substitution "
+            << sigma << std::endl;
+
         if (Configuration::isDebugBuild())
         {
           const Node lhsImg = sigma->apply(lhs);
           Assert(!expr::hasBoundVar(lhsImg));
           const TNode lhsImgEnt = quantEng->getEntailedTerm(lhsImg);
+
+          Trace("get-score-lhs")
+              << "LHS image " << lhsImg << " is entailed equal to " << lhsImgEnt
+              << " which is " << (ee->hasTerm(lhsImgEnt) ? "" : "not ")
+              << "in the equality engine" << std::endl;
+
           Assert(lhsImgEnt.isNull()
                  || (ee->hasTerm(lhsImgEnt) && ee->areEqual(lhsImgEnt, eqc)));
         }
@@ -133,7 +143,7 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
 
             confirmedOnOneSubs = true;
           }
-          else if (ee->getRepresentative(rhsImgEnt).isConst())
+          else if (eqc.isConst() && ee->getRepresentative(rhsImgEnt).isConst())
           {
             ++trustCex;
           }
