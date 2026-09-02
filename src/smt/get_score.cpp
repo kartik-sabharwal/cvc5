@@ -60,6 +60,8 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
 
   EqualityEngine* ee = quantEng->getEqualityEngine();
 
+  std::cout << ee->debugPrintEqc();
+
   EMatch ematch(lhs, callback.get(), ee);
 
   uint64_t distinctEqcs = 0;

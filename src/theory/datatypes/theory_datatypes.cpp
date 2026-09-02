@@ -1930,9 +1930,11 @@ void TheoryDatatypes::checkSplit(bool lastCall)
       {
         if (d_eagerSplitLastCall && lastCall)
         {
+          // The value of needSplit remains 'true'.
         }
         else if (d_eagerSplitFull && eagerSplitFullCounter == 0)
         {
+          // The value of needSplit remains 'true'.
         }
         else
         {

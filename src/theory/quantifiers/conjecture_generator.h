@@ -370,6 +370,9 @@ class TheoremIndex
     std::vector<unsigned> a;
     addTheoremNode(lhs, v, a, rhs);
   }
+  /**
+   * Finds terms that are equivalent to n and stashes them in the vector terms.
+   */
   void getEquivalentTerms(TNode n, std::vector<Node>& terms)
   {
     std::vector<TNode> nv;
