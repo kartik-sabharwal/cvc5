@@ -2011,6 +2011,14 @@ name   = "Quantifiers"
   help     = "the maximum number of grounding substitutions we should find for any one canonical (LHS) term before we try to filter conjectures based on e-matching (-1 == no limit, default)"
 
 [[option]]
+  name     = "ecgSplit"
+  category = "expert"
+  long     = "ecg-split"
+  type     = "bool"
+  default  = "true"
+  help     = "If true then conjectures will be sent as splitting lemmas: if C is a candidate conjecture we will send (C or not(C)) to the solver.  If false then given a conjecture C we will use a subsolver to check whether it is inductively entailed by the assertions at decision level zero.  In case C is inductively entailed then it is valid therefore we assert C directly.  Otherwise we skip over C."
+
+[[option]]
   name       = "contextualEnumerator"
   category   = "expert"
   long       = "ctx-enum"

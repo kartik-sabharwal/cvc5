@@ -121,6 +121,7 @@ EnumerativeConjectureGenerator::EnumerativeConjectureGenerator(
   d_preferConstRepresentatives =
       options().quantifiers.preferConstRepresentatives;
   d_preferActiveTerms = options().quantifiers.preferActiveTerms;
+  d_split = options().quantifiers.ecgSplit;
   d_defaultOptions.copyValues(options());
   d_defaultOptions.write_quantifiers().quantInduction = false;
   d_defaultOptions.write_quantifiers().dtStcInduction = false;
@@ -795,7 +796,8 @@ void EnumerativeConjectureGenerator::checkHelper()
                    *d_initialFacts,
                    candIdx,
                    d_conjectures,
-                   d_qstate);
+                   d_qstate,
+                   d_split);
 }
 
 void EnumerativeConjectureGenerator::debugPrintLHSToSubstitutions(
@@ -1585,7 +1587,8 @@ bool EnumerativeConjectureGenerator::filterConjecture(
     TNode conj,
     const Set<TNode>& conjectures,
     const TNode trueNode,
-    const quantifiers::QuantifiersState& quantifiersState)
+    const quantifiers::QuantifiersState& quantifiersState,
+    const bool split)
 {
   FilterResult result = NONE;
 
@@ -1598,7 +1601,8 @@ bool EnumerativeConjectureGenerator::filterConjecture(
   {
     result = CACHED;
   }
-  else if (isEntailed(env,
+  // Entailment checks are always helpful.  However they aren't necessary when split is true and we're eventually going to assert a splitting lemma for the conjecture.  Let's avoid subsolver-based entailment checks when split is true.
+  else if (!split && isEntailed(env,
                       subsolverOpts,
                       termReg,
                       indEntBuf,
@@ -1611,7 +1615,7 @@ bool EnumerativeConjectureGenerator::filterConjecture(
 
     result = DEDUCTIVE;
   }
-  else if (isEntailed(env,
+  else if (!split && isEntailed(env,
                       subsolverOpts,
                       termReg,
                       indEntBuf,
@@ -1632,21 +1636,24 @@ bool EnumerativeConjectureGenerator::filterConjecture(
     result = INDUCTIVE;
   }
 
-  // debugPrintFilterConjecture(
-  //     Trace("enumerative-conjecture-generator"), conj, result);
-
-  return result == INDUCTIVE;
+  return (split || result == INDUCTIVE);
 }
 
 void EnumerativeConjectureGenerator::assertConjecture(
-    quantifiers::QuantifiersInferenceManager& quantInfMgr, TNode conj)
+    quantifiers::QuantifiersInferenceManager& quantInfMgr, TNode conj, const bool split, const Vector<Node>& indEntBuf)
 {
-  Node lem = NodeManager::mkNode(Kind::OR, conj.negate(), conj);
-  Trace("enumerative-conjecture-generator")
-      << "* asserting " << lem << std::endl;
-  quantInfMgr.addPendingLemma(
-      lem, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
-  quantInfMgr.addPendingPhaseRequirement(conj, false);
+  if (split)
+  {
+    Node lem = NodeManager::mkNode(Kind::OR, conj.negate(), conj);
+    Trace("enumerative-conjecture-generator") << "* asserting " << lem << std::endl;
+    quantInfMgr.addPendingLemma(lem, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
+    quantInfMgr.addPendingPhaseRequirement(conj, false);
+  }
+  else
+  {
+    Assert(member(indEntBuf, Node(conj)));
+    quantInfMgr.addPendingLemma(conj, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
+  }
 }
 
 Node EnumerativeConjectureGenerator::candidateToConjecture(
@@ -1682,7 +1689,8 @@ void EnumerativeConjectureGenerator::filterCandidates(
     const Set<TNode>& initialFacts,
     Vector<PriorityQueue<Candidate>>& candIdx,
     Set<TNode>& conjectures,
-    const quantifiers::QuantifiersState& quantifiersState)
+    const quantifiers::QuantifiersState& quantifiersState,
+    const bool split)
 {
   Optional<std::int64_t> fuel(initialFuel);
 
@@ -1719,11 +1727,12 @@ void EnumerativeConjectureGenerator::filterCandidates(
                            conj,
                            conjectures,
                            nodeMgr->mkConst(true),
-                           quantifiersState))
+                           quantifiersState,
+                           split))
       {
         conjectures.insert(conj);
 
-        assertConjecture(quantInfMgr, conj);
+        assertConjecture(quantInfMgr, conj, split, indEntBuf);
 
         if (fuel && *fuel < 1)
         {

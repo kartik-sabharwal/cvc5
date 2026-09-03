@@ -157,6 +157,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
   bool d_preferActiveTerms;
   Options d_defaultOptions;
   Set<TNode> d_conjectures;
+  bool d_split;  
 
   // Functions, non-static
 
@@ -401,7 +402,8 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
       const Set<TNode>& initialFacts,
       Vector<PriorityQueue<Candidate>>& candIdx,
       Set<TNode>& conjectures,
-      const quantifiers::QuantifiersState& quantifiersState);
+      const quantifiers::QuantifiersState& quantifiersState,
+      const bool split);
 
   static bool filterConjecture(Env& env,
                                Options& subsolverOpts,
@@ -415,10 +417,11 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
                                TNode conj,
                                const Set<TNode>& conjectures,
                                const TNode trueNode,
-                               const quantifiers::QuantifiersState& quantifiersState);
+                               const quantifiers::QuantifiersState& quantifiersState,
+                               const bool split);
 
   static void assertConjecture(
-      quantifiers::QuantifiersInferenceManager& quantInfMgr, TNode conj);
+      quantifiers::QuantifiersInferenceManager& quantInfMgr, TNode conj, const bool split, const Vector<Node>& indEntBuf);
 
   static Node candidateToConjecture(NodeManager* nodeMgr,
                                     const Candidate& cand,
