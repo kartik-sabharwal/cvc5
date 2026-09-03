@@ -17,7 +17,7 @@ class Index
 {
  public:
   std::vector<Node> d_terms;
-  std::unordered_map<Node, Index> d_variableToIndex;
+  std::unordered_map<Node, Index*> d_variableToIndex;
 };
 
 class Candidate

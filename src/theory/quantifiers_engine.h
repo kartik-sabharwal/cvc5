@@ -165,6 +165,14 @@ class QuantifiersEngine : protected EnvObj
    * Exposes d_treg.getTermDatabase()->isTermActive(n)
    */
   bool isTermActive(TNode n) const;
+  /**
+   * Stores preprocessed assertions for later retrieval by quantifiers modules.
+   */
+  void setPreprocessedAssertions(const std::vector<Node>& assertions);
+  /**
+   * Returns the saved collection of preprocessed assertions.
+   */
+  const std::vector<Node>& getPreprocessedAssertions();
   //----------end user interface for instantiations
  private:
   /**

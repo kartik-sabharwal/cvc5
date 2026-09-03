@@ -60,6 +60,9 @@ class QuantifiersState : public TheoryState
   /** Is conflicting instance? */
   bool isConflictingInst() const { return d_conflictInst.get(); }
 
+  /** The set of preprocessed assertions */
+  std::vector<Node> d_preprocessedAssertions;
+
  private:
   /** The number of instantiation rounds in this SAT context */
   context::CDO<uint64_t> d_ierCounterc;

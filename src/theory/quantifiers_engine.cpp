@@ -862,5 +862,14 @@ bool QuantifiersEngine::isTermActive(TNode n) const
 {
   return d_treg.getTermDatabase()->isTermActive(n);
 }
+void QuantifiersEngine::setPreprocessedAssertions(const std::vector<Node>& assertions)
+{
+  std::vector<Node>& preprocessedAssertions = d_qstate.d_preprocessedAssertions;
+  preprocessedAssertions.insert(preprocessedAssertions.begin(), assertions.cbegin(), assertions.cend());
+}
+const std::vector<Node>& QuantifiersEngine::getPreprocessedAssertions()
+{
+  return d_qstate.d_preprocessedAssertions;
+}
 }  // namespace theory
 }  // namespace cvc5::internal

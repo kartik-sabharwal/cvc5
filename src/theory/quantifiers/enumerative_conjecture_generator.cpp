@@ -478,7 +478,7 @@ EnumerativeConjectureGenerator::getEnumerationData(
 
   std::vector<std::unordered_set<Node>> sizeToCanonicals;
   sizeToCanonicals.resize(maximumSize + 1);
-
+ 
   std::unordered_map<Node, Index> variableToIndex;
 
   Node term;
@@ -984,6 +984,19 @@ void EnumerativeConjectureGenerator::check(CVC5_UNUSED Theory::Effort effort,
 
   if (!d_initialFacts)
   {
+    // Let's try to print the list of preprocessed assertions.
+    // If we can pull it off we'll use it to populate the set of initial facts.
+    {
+    std::ostream& out = Trace("enumerative-conjecture-generator");
+    out << "Preprocessed assertions:" << std::endl;
+    const std::vector<Node>& assertions = getState().d_preprocessedAssertions;
+    for (auto assertion : assertions)
+    {
+      out << "+ " << assertion << std::endl;
+    }
+    }
+    // 
+
     d_initialFacts = getInitialFacts(d_qstate.getValuation(), d_treg);
   }
 
@@ -1127,18 +1140,18 @@ void EnumerativeConjectureGenerator::addTerm(
    */
   Vector<Node> variables = getSortedVariables(termCanonize, typeToNumber, term);
 
-  CIt<Vector<Node>> variableRef = variables.begin();
+  auto variable = variables.cbegin();
 
-  Index* indexPtr = &rootVariableToIndex[*variableRef];
+  Index *index = &rootVariableToIndex[*variable];
 
-  ++variableRef;
+  ++variable;
 
-  for (; variableRef != variables.end(); ++variableRef)
+  for (; variable != variables.cend(); ++variable)
   {
-    indexPtr = &(indexPtr->d_variableToIndex[*variableRef]);
+    index = index->d_variableToIndex[*variable];
   }
 
-  indexPtr->d_terms.push_back(term);
+  index->d_terms.push_back(term);
 }
 
 void EnumerativeConjectureGenerator::debugPrintSizeToCanonicals(
@@ -1162,51 +1175,48 @@ void EnumerativeConjectureGenerator::debugPrintSizeToCanonicals(
 
 void EnumerativeConjectureGenerator::debugPrintIndex(
     std::ostream& out,
-    const std::unordered_map<Node, Index>& rootVariableToIndex)
+    const Map<Node, Index>& rootVariableToIndex)
 {
   struct Job
   {
-    std::vector<Node> d_path;
-    const Index* d_index;
+    Vector<Node> d_path;
+    const Index *d_index;
   };
 
-  std::vector<Job*> jobs;
+  Vector<std::unique_ptr<Job>> jobs;
 
-  for (std::unordered_map<Node, Index>::const_iterator entryPtr =
-           rootVariableToIndex.begin();
-       entryPtr != rootVariableToIndex.end();
-       ++entryPtr)
+  for (auto entry = rootVariableToIndex.cbegin();
+       entry != rootVariableToIndex.cend();
+       ++entry)
   {
-    jobs.emplace_back(new Job{std::vector<Node>{std::get<0>(*entryPtr)},
-                              &std::get<1>(*entryPtr)});
+    const Vector<Node> path{entry->first};
+    const Index *index = &(entry->second);
+    jobs.emplace_back(new Job{path, index});
   }
 
   while (!jobs.empty())
   {
-    Job* job = jobs.back();
+    std::unique_ptr<Job> job = std::move(jobs.back());
+
     jobs.pop_back();
 
-    std::vector<Node>& path = job->d_path;
-    const Index* index = job->d_index;
-    const std::unordered_map<Node, Index>& variableToIndex =
-        index->d_variableToIndex;
+    const std::vector<Node>& path = job->d_path;
+    const Index *index = job->d_index;
+    const Map<Node, Index*>& variableToIndex = index->d_variableToIndex;
 
     out << "Path " << path << ":" << std::endl;
     out << "Terms " << index->d_terms << std::endl;
 
-    for (std::unordered_map<Node, Index>::const_iterator entryPtr =
-             variableToIndex.begin();
-         entryPtr != variableToIndex.end();
-         ++entryPtr)
+    for (auto entry = variableToIndex.cbegin();
+         entry != variableToIndex.cend();
+         ++entry)
     {
-      std::vector<Node> branchPath;
-      branchPath.insert(branchPath.end(), path.begin(), path.end());
-      branchPath.push_back(std::get<0>(*entryPtr));
+      std::vector<Node> branchPath(path);
 
-      jobs.emplace_back(new Job{branchPath, &std::get<1>(*entryPtr)});
+      branchPath.push_back(entry->first);
+
+      jobs.emplace_back(new Job{branchPath, entry->second});
     }
-
-    delete job;
   }
 }
 
@@ -1263,84 +1273,91 @@ std::vector<std::vector<Node>> EnumerativeConjectureGenerator::findCompatible(
   const Vector<Node> variables =
       getSortedVariables(termCanonize, typeToNumber, canonical);
 
-  const size_t nVariables = variables.size();
+  const size_t variablesSize = variables.size();
 
-  class Job
+  class JobData
   {
-   public:
+    public:
     size_t d_position;
-    Ref<const Index> d_index;
+    const Index *d_index;
     size_t d_skipped;
     size_t d_difference;
 
-    Job(const size_t position,
-        const Index& index,
-        const size_t skipped,
-        const size_t difference)
+    JobData(const size_t position,
+            const Index *index,
+            const size_t skipped,
+            const size_t difference)
         : d_position(position),
-          d_index(std::cref(index)),
+          d_index(index),
           d_skipped(skipped),
           d_difference(difference)
     {
     }
   };
 
-  Vector<Ptr<Job>> jobs;
+  typedef std::unique_ptr<JobData> Job;
 
-  for (size_t position = 0; position < nVariables; ++position)
+  Vector<Job> jobs;
+
+  for (size_t position = 0; position < variablesSize; ++position)
   {
-    TNode variable = variables[position];
+    const TNode variable = variables[position];
 
     if (hasKey(rootVariableToIndex, variable))
     {
-      jobs.emplace_back(new Job(position + 1,
-                                rootVariableToIndex.at(variable),
-                                position,
-                                nVariables - 1));
+      jobs.emplace_back(
+        new JobData(
+          position + 1,
+          &(rootVariableToIndex.at(variable)),
+          position,
+          variablesSize - 1));
     }
   }
 
   while (!jobs.empty())
   {
-    Ptr<Job> job = std::move(jobs.back());
+    Job job = std::move(jobs.back());
 
     jobs.pop_back();
 
-    const size_t jPosition = job->d_position;
-    const Index& jIndex = job->d_index.get();
-    const size_t jSkipped = job->d_skipped;
-    const size_t jDifference = job->d_difference;
+    const size_t jobPosition = job->d_position;
+    const Index *jobIndex = job->d_index;
+    const size_t jobSkipped = job->d_skipped;
+    const size_t jobDifference = job->d_difference;
 
-    if (jDifference <= maximumDifference)
+    if (jobDifference <= maximumDifference)
     {
-      const Vector<Node>& jTerms = jIndex.d_terms;
+      const Vector<Node>& jobTerms = jobIndex->d_terms;
 
-      for (CIt<Vector<Node>> jTerm = jTerms.begin(); jTerm != jTerms.end();
-           ++jTerm)
+      for (auto jobTerm : jobTerms)
       {
-        if (lhsType == (*jTerm)[0].getType()
-            && (!lhsIsApplyCtor
-                || (*jTerm)[0].getKind() != Kind::APPLY_CONSTRUCTOR))
+        const TNode rhs = jobTerm[0];
+        const TypeNode rhsType = rhs.getType();
+        const bool rhsIsApplyCtor = (rhs.getKind() == Kind::APPLY_CONSTRUCTOR);
+
+        if (lhsType == rhsType && (!lhsIsApplyCtor || !rhsIsApplyCtor))
         {
-          result[computeSize(*jTerm)].push_back(*jTerm);
+          result[computeSize(jobTerm)].push_back(jobTerm);
         }
       }
     }
 
-    if (jSkipped <= maximumDifference)
+    if (jobSkipped <= maximumDifference)
     {
-      const Map<Node, Index>& jVarToIdx = jIndex.d_variableToIndex;
+      const Map<Node, Index*>& jobVariableToIndex = jobIndex->d_variableToIndex;
 
-      for (size_t position = jPosition; position < nVariables; ++position)
+      for (size_t position = jobPosition; position < variablesSize; ++position)
       {
-        TNode variable = variables[position];
+        const TNode variable = variables[position];
 
-        if (hasKey(jVarToIdx, variable))
+        if (hasKey(jobVariableToIndex, variable))
         {
-          jobs.emplace_back(new Job(position + 1,
-                                    jVarToIdx.at(variable),
-                                    jSkipped + (position - jPosition),
-                                    jDifference - 1));
+          jobs.emplace_back(
+            new JobData(
+              position + 1,
+              jobVariableToIndex.at(variable),
+              jobSkipped + (position - jobPosition),
+              jobDifference - 1));
         }
       }
     }

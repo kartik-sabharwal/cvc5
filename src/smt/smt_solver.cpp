@@ -194,6 +194,13 @@ void SmtSolver::assertToInternal(preprocessing::AssertionPipeline& ap)
       d_ppSkolemMap[newIndex] = k.second;
     }
   }
+
+  // For now let us unconditionally store all preprocessed assertions in the
+  // QuantifiersState object so that we can retrieve them from the
+  // enumerative conjecture generator later.
+  // -Kartik
+  getQuantifiersEngine()->setPreprocessedAssertions(assertions);
+  //    
 }
 
 const context::CDList<Node>& SmtSolver::getPreprocessedAssertions() const
