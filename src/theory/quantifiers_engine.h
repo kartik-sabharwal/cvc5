@@ -73,6 +73,8 @@ class QuantifiersEngine : protected EnvObj
   quantifiers::QModelBuilder* getModelBuilder() const;
   /** get term database sygus */
   quantifiers::TermDbSygus* getTermDatabaseSygus() const;
+  /** get term registry for get_score() - Kartik */
+  quantifiers::TermRegistry& getTermRegistry() const;
   //---------------------- end utilities
   /** presolve */
   void presolve();

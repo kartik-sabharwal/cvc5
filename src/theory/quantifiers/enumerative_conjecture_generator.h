@@ -527,7 +527,7 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
      const eq::EqualityEngine* ee);
 
    std::pair<size_t, size_t> getScoreSubsolver(
-     TNode conjecture,
+     Node conjecture,
      SolverEngine *filteringSubsolver);
 
    std::pair<size_t, size_t> getScore(

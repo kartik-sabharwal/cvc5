@@ -11,7 +11,12 @@ namespace cvc5::internal {
 
 using theory::QuantifiersEngine;
 using theory::TheoryModel;
-typedef std::tuple<uint64_t, uint64_t, uint64_t> Score;
+typedef std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> Score;
+
+Score getScoreInternal2(
+  const TNode& conjecture,
+  const theory::quantifiers::TermRegistry& termRegistry,
+  theory::eq::EqualityEngine *equalityEngine);
 
 Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng);
 

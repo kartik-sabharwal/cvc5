@@ -949,18 +949,27 @@ void SolverEngine::assertFormula(const Node& formula)
   assertFormulaInternal(formula);
 }
 
-void SolverEngine::getScore(Node& conjecture)
+tuple<uint64_t, uint64_t, uint64_t, uint64_t> SolverEngine::getScore(Node& conjecture)
 {
   theory::TrustSubstitutionMap& topLvlSubs = d_env->getTopLevelSubstitutions();
 
   const Node newConjecture = topLvlSubs.apply(conjecture);
 
-  std::tuple<uint64_t, uint64_t, uint64_t> score =
-      getScoreInternal(newConjecture, getAvailableQuantifiersEngine("get-score"));
+  tuple<uint64_t, uint64_t, uint64_t, uint64_t> score =
+    getScoreInternal(newConjecture, getAvailableQuantifiersEngine("get-score"));
 
-  std::cout << std::get<0>(score) << " confirmed / ";
-  std::cout << std::get<1>(score) << " tested / ";
-  std::cout << std::get<2>(score) << " skipped" << std::endl;
+  uint64_t confirmed = std::get<0>(score);
+  uint64_t untrustworthyCounterexamples = std::get<1>(score);
+  uint64_t trustworthyCounterexamples = std::get<2>(score);
+  uint64_t skipped = std::get<3>(score);
+
+  std::cout <<
+    confirmed << " confirmed, " <<
+    untrustworthyCounterexamples << " untrustworthy counterexamples, " <<
+    trustworthyCounterexamples << " trustworthy counterexamples, " <<
+    skipped << " skipped" << std::endl;
+
+  return score;
 }
 
 void SolverEngine::assertFormulaInternal(const Node& formula)

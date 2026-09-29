@@ -145,6 +145,15 @@ TermDbSygus* QuantifiersEngine::getTermDatabaseSygus() const
 }
 /// !!!!!!!!!!!!!!
 
+// For expr/get_score.cpp
+
+TermRegistry& QuantifiersEngine::getTermRegistry() const
+{
+  return d_treg;
+}
+
+// - Kartik
+
 void QuantifiersEngine::presolve()
 {
   Trace("quant-engine-proc") << "QuantifiersEngine : presolve " << std::endl;

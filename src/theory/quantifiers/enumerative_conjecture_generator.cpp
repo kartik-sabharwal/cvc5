@@ -691,10 +691,22 @@ std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScoreMainSolver(
 }
 
 std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScoreSubsolver(
-    TNode conjecture,
+    Node conjecture,
     SolverEngine *filteringSubsolver)
 {
-  return std::pair<size_t, size_t>{0, 0};
+  using std::tuple;
+  using std::uint64_t;
+
+  const tuple<uint64_t, uint64_t, uint64_t, uint64_t> score =
+    filteringSubsolver->getScore(conjecture);
+
+  const uint64_t confirmed = std::get<0>(score);
+
+  const uint64_t trustworthyCounterexamples = std::get<2>(score);
+
+  const size_t tested = trustworthyCounterexamples + confirmed;
+
+  return std::pair<size_t, size_t>{tested, confirmed};
 }
 
 std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScore(
@@ -1511,11 +1523,11 @@ Node EnumerativeConjectureGenerator::findFunctionSymbolByName(
 }
 
 std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutionsPreferred(
-    TermDb* termDatabase,
+    CVC5_UNUSED TermDb* termDatabase,
     eq::EqualityEngine* equalityEngine,
     TNode canonical,
     const bool preferConstRepresentatives,
-    const bool preferActiveTerms,
+    CVC5_UNUSED const bool preferActiveTerms,
     const std::int64_t substitutionsLimit)
 {
   // Delete when finished!

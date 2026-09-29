@@ -331,7 +331,7 @@ class CVC5_EXPORT SolverEngine
    */
   void assertFormula(const Node& formula);
 
-  void getScore(Node& conjecture);
+  std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> getScore(Node& conjecture);
 
   /**
    * Assert a formula (if provided) to the current context and call

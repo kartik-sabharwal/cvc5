@@ -3,6 +3,7 @@
 #include "expr/e_match.h"
 #include "expr/node_algorithm.h"
 #include "expr/node_traversal.h"
+#include "theory/quantifiers/term_registry.h"
 
 namespace cvc5::internal {
 using theory::eq::EqClassesIterator;
@@ -18,16 +19,47 @@ class SimpleCandidateCallback : public CandidateCallback
 class ActiveCandidateCallback : public CandidateCallback
 {
  public:
-  QuantifiersEngine* d_quantEng;
+  theory::quantifiers::TermDb* d_termDatabase;
 
-  ActiveCandidateCallback(QuantifiersEngine* quantEng)
-      : CandidateCallback(), d_quantEng(quantEng)
+  ActiveCandidateCallback(theory::quantifiers::TermDb* termDatabase)
+      : CandidateCallback(), d_termDatabase{termDatabase}
   {
   }
-  bool consider(TNode cand) override { return d_quantEng->isTermActive(cand); }
+  bool consider(TNode candidate) override
+  {
+    return d_termDatabase->isTermActive(candidate);
+  }
 };
 
-Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
+Score summarizeScore(uint64_t confirmed, uint64_t untrustCex, uint64_t trustCex, uint64_t skipped, uint64_t distinctEqcs, uint64_t rhsEntailed, uint64_t rhsEMatch)
+{
+  if (TraceIsOn("get-score-summary"))
+  {
+    std::ostream& out = Trace("get-score-summary");
+    out << "confirmed = " << confirmed;
+    out << ", untrustCex = " << untrustCex;
+    out << ", trustCex = " << trustCex;
+    out << ", skipped = " << skipped;
+    out << ", distinctEqcs = " << distinctEqcs;
+    out << ", rhsEntailed = " << rhsEntailed;
+    out << ", rhsEMatch = " << rhsEMatch;
+    out << std::endl;
+  }
+
+  return std::make_tuple(confirmed, untrustCex, trustCex, skipped);
+}
+
+Score getScoreInternal(const TNode& conjecture,
+                       QuantifiersEngine* quantifiersEngine)
+{
+  return getScoreInternal2(conjecture,
+                           quantifiersEngine->getTermRegistry(),
+                           quantifiersEngine->getEqualityEngine());
+}
+
+Score getScoreInternal2(const TNode& conjecture,
+                        const theory::quantifiers::TermRegistry& termRegistry,
+                        theory::eq::EqualityEngine* equalityEngine)
 {
   Assert(conjecture.getKind() == Kind::FORALL);
 
@@ -55,14 +87,17 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
                          rhsVarsSorted.cend()));
   }
 
-  std::unique_ptr<CandidateCallback> callback(
-      new ActiveCandidateCallback(quantEng));
+  using theory::quantifiers::EntailmentCheck;
 
-  EqualityEngine* ee = quantEng->getEqualityEngine();
+  EntailmentCheck *entailmentCheck = termRegistry.getEntailmentCheck();
 
-  std::cout << ee->debugPrintEqc();
+  using std::unique_ptr;
 
-  EMatch ematch(lhs, callback.get(), ee);
+  unique_ptr<CandidateCallback> callback(new ActiveCandidateCallback(termRegistry.getTermDatabase()));
+
+  std::cout << equalityEngine->debugPrintEqc();
+
+  EMatch ematch(lhs, callback.get(), equalityEngine);
 
   uint64_t distinctEqcs = 0;
   uint64_t confirmed = 0;
@@ -72,7 +107,8 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
   uint64_t rhsEMatch = 0;
   uint64_t skipped = 0;
 
-  for (EqClassesIterator eqcI = EqClassesIterator(ee); !eqcI.isFinished();
+  for (EqClassesIterator eqcI = EqClassesIterator(equalityEngine);
+       !eqcI.isFinished();
        ++eqcI)
   {
     const TNode eqc = *eqcI;
@@ -94,25 +130,28 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
         {
           const Node lhsImg = sigma->apply(lhs);
           Assert(!expr::hasBoundVar(lhsImg));
-          const TNode lhsImgEnt = quantEng->getEntailedTerm(lhsImg);
+          const TNode lhsImgEnt = entailmentCheck->getEntailedTerm(lhsImg);
 
           Trace("get-score-lhs")
               << "LHS image " << lhsImg << " is entailed equal to " << lhsImgEnt
-              << " which is " << (ee->hasTerm(lhsImgEnt) ? "" : "not ")
+              << " which is "
+              << (equalityEngine->hasTerm(lhsImgEnt) ? "" : "not ")
               << "in the equality engine" << std::endl;
 
           Assert(lhsImgEnt.isNull()
-                 || (ee->hasTerm(lhsImgEnt) && ee->areEqual(lhsImgEnt, eqc)));
+                 || (equalityEngine->hasTerm(lhsImgEnt)
+                     && equalityEngine->areEqual(lhsImgEnt, eqc)));
         }
 
         const Node rhsImg = sigma->apply(rhs);
-        const TNode rhsImgEnt = quantEng->getEntailedTerm(rhsImg);
 
-        Assert(rhsImgEnt.isNull() || ee->hasTerm(rhsImgEnt));
+        const TNode rhsImgEnt = entailmentCheck->getEntailedTerm(rhsImg);
+
+        Assert(rhsImgEnt.isNull() || equalityEngine->hasTerm(rhsImgEnt));
 
         if (rhsImgEnt.isNull())
         {
-          EMatch ematchRhsImg(rhsImg, callback.get(), ee);
+          EMatch ematchRhsImg(rhsImg, callback.get(), equalityEngine);
 
           ematchRhsImg.reset(eqc);
 
@@ -139,15 +178,17 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
         {
           ++rhsEntailed;
 
-          if (ee->areEqual(eqc, rhsImgEnt))
+          if (equalityEngine->areEqual(eqc, rhsImgEnt))
           {
             ++confirmed;
 
             confirmedOnOneSubs = true;
           }
-          else if (eqc.isConst() && ee->getRepresentative(rhsImgEnt).isConst())
+          else if (equalityEngine->areDisequal(eqc, rhsImgEnt, false) || (eqc.isConst() && equalityEngine->getRepresentative(rhsImgEnt).isConst()))
           {
             ++trustCex;
+
+            return summarizeScore(confirmed, untrustCex, trustCex, skipped, distinctEqcs, rhsEntailed, rhsEMatch);
           }
           else
           {
@@ -163,19 +204,6 @@ Score getScoreInternal(const TNode& conjecture, QuantifiersEngine* quantEng)
     }
   }
 
-  if (TraceIsOn("get-score-summary"))
-  {
-    std::ostream& out = Trace("get-score-summary");
-    out << "confirmed = " << confirmed;
-    out << ", distinctEqcs = " << distinctEqcs;
-    out << ", trustCex = " << trustCex;
-    out << ", untrustCex = " << untrustCex;
-    out << ", skipped = " << skipped;
-    out << ", rhsEntailed = " << rhsEntailed;
-    out << ", rhsEMatch = " << rhsEMatch;
-    out << std::endl;
-  }
-
-  return std::make_tuple(confirmed, confirmed + trustCex + untrustCex, skipped);
+  return summarizeScore(confirmed, untrustCex, trustCex, skipped, distinctEqcs, rhsEntailed, rhsEMatch);
 }
 }  // namespace cvc5::internal
