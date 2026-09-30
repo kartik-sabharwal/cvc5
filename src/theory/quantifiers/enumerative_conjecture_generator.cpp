@@ -618,8 +618,12 @@ CandidateIndex EnumerativeConjectureGenerator::getCandidateIndex(
         {
           TNode rhs = (*compat)[0];
 
+          Trace("enumerative-conjecture-generator") << "Handing over control to getScore()..." << std::endl;
+
           const Score score =
               getScore(entChk, ee, lhs, rhs, subss, nodeMgr, dedEnt, indEnt);
+
+          Trace("enumerative-conjecture-generator") << "...getScore() returned control." << std::endl;
 
           const size_t tested = std::get<0>(score);
 
@@ -654,20 +658,39 @@ std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScoreMainSolver(
   
   auto subs = subss.cbegin();
 
+  Trace("enumerative-conjecture-generator") << "Entering scoring loop..." << std::endl;
+
   while (tested == confirmed && subs != subss.cend())
   {
-    TNode groundLhs = subs->apply(lhs);
-    TNode groundRhs = subs->apply(rhs);
+    Node groundLhs = subs->apply(lhs);
 
-    TNode knownLhs = entChk->getEntailedTerm(groundLhs);
-    TNode knownRhs = entChk->getEntailedTerm(groundRhs);
+    Trace("enumerative-conjecture-generator") << "Mark A" << std::endl;
+
+    Node groundRhs = subs->apply(rhs);
+
+    Trace("enumerative-conjecture-generator") << "Mark B" << std::endl;
+
+    Node knownLhs = entChk->getEntailedTerm(groundLhs);
+
+    Trace("enumerative-conjecture-generator") << "Mark C" << std::endl;
+
+    Node knownRhs = entChk->getEntailedTerm(groundRhs);
+
+    Trace("enumerative-conjecture-generator") << "Mark D" << std::endl;
 
     const bool known = !knownLhs.isNull() && !knownRhs.isNull();
+
+    Trace("enumerative-conjecture-generator") << "Mark E" << std::endl;
 
     if (known)
     {
       TNode lhsEqc = ee->getRepresentative(knownLhs);
+
+      Trace("enumerative-conjecture-generator") << "Mark F" << std::endl;
+
       TNode rhsEqc = ee->getRepresentative(knownRhs);
+
+      Trace("enumerative-conjecture-generator") << "Mark G" << std::endl;
 
       if (ee->areEqual(knownLhs, knownRhs))
       {
@@ -682,10 +705,14 @@ std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScoreMainSolver(
       {
         ++tested;
       }
+
+      Trace("enumerative-conjecture-generator") << "Mark H" << std::endl;
     }
 
     ++subs;
   }
+
+  Trace("enumerative-conjecture-generator") << "...left scoring loop" << std::endl;
 
   return {tested, confirmed};
 }
@@ -723,18 +750,35 @@ std::pair<size_t, size_t> EnumerativeConjectureGenerator::getScore(
 
   Node conjecture = candidateToConjecture(nodeMgr, Candidate(lhs, rhs, 0, 0), nullptr);
 
-  if (lhs == rhs || member(dedEnt, conjecture) || member(indEnt, conjecture))
+  Trace("enumerative-conjecture-generator") << "Built conjecture from candidate" << std::endl;
+
+  const bool isDeductivelyEntailed = member(dedEnt, conjecture);
+
+  Trace("enumerative-conjecture-generetor") << "Checked for deductive entailment" << std::endl;
+
+  const bool isInductivelyEntailed = member(indEnt, conjecture);
+
+  Trace("enumerative-conjecture-generetor") << "Checked for inductive entailment" << std::endl;
+
+  if (lhs == rhs || isDeductivelyEntailed || isInductivelyEntailed)
   {
     result = Score{1, 1};
   }
   else if (d_subsolverEMatchFilter)
   {
+    Trace("enumerative-conjecture-generator") << "Asking subsolver for score..." << std::endl;
+
     result = getScoreSubsolver(conjecture, d_filteringSubsolver.get());
+
+    Trace("enumerative-conjecture-generator") << "...got score from subsolver." << std::endl;
   }
   else
   {
+    Trace("enumerative-conjecture-generator") << "Computing score..." << std::endl;
+
     result = getScoreMainSolver(conjecture, subss, entChk, ee);
 
+    Trace("enumerative-conjecture-generator") << "...got score." << std::endl;
   }
 
   return result;
@@ -835,6 +879,8 @@ void EnumerativeConjectureGenerator::checkHelper()
                                   d_preferActiveTerms,
                                   options().quantifiers.ecgSubstitutionLimit);
 
+  Trace("enumerative-conjecture-generator") << "Successfully mapped LHS terms to grounding substitutions!" << std::endl;
+
   CandidateIndex candIdx = getCandidateIndex(d_maximumSize,
                                              d_maximumDifference,
                                              d_termCanonize,
@@ -847,6 +893,8 @@ void EnumerativeConjectureGenerator::checkHelper()
                                              nodeManager(),
                                              d_deductivelyEntailed,
                                              d_inductivelyEntailed);
+
+  Trace("enumerative-conjecture-generator") << "Successfully created index of candidates!" << std::endl;
 
   // debugPrintCandidateIndex(traceStream, candIdx);
 
@@ -1236,7 +1284,7 @@ void EnumerativeConjectureGenerator::addTerm(
     const Node term,
     Map<Node, Index>& rootVariableToIndex)
 {
-  Trace("enumerative-conjecture-generator") << "Trying to add " << term << " to pattern index." << std::endl;
+  // Trace("enumerative-conjecture-generator") << "Trying to add " << term << " to pattern index." << std::endl;
 
   /* To implement this function we do the following:
    *
@@ -1273,7 +1321,7 @@ void EnumerativeConjectureGenerator::addTerm(
 
   index->d_terms.push_back(term);
 
-  Trace("enumerative-conjecture-generator") << "Successfully added " << term << " to pattern index." << std::endl;
+  // Trace("enumerative-conjecture-generator") << "Successfully added " << term << " to pattern index." << std::endl;
 }
 
 void EnumerativeConjectureGenerator::debugPrintSizeToCanonicals(
@@ -1533,7 +1581,7 @@ std::vector<Subs> EnumerativeConjectureGenerator::findSubstitutionsPreferred(
   // Delete when finished!
   // -Kartik
   // {
-  Trace("enumerative-conjecture-generator") << "Canonical is " << canonical << std::endl;
+  // Trace("enumerative-conjecture-generator") << "Canonical is " << canonical << std::endl;
   // }
 
   Vector<Subs> substitutions;
