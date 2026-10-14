@@ -1051,7 +1051,7 @@ std::unordered_set<TNode> EnumerativeConjectureGenerator::getProvedConjectures(
     const Valuation& valuation,
     const quantifiers::TermRegistry& termReg)
 {
-  std::ostream& out = Trace("enumerative-conjecture-generator");
+  std::ostream& out = Trace("ecg-getProvedConjectures");
 
   out << "getProvedConjectures current conjectures:" << std::endl;
   for (CIt<Set<TNode>> conjIter = conjectures.begin();
@@ -1895,8 +1895,13 @@ void EnumerativeConjectureGenerator::assertConjecture(
   else
   {
     Assert(member(indEntBuf, Node(conj)));
+
+    Node lem = NodeManager::mkNode(Kind::OR, conj.negate(), conj);
+
     quantInfMgr.addPendingLemma(
-        conj, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
+        lem, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
+
+    quantInfMgr.addPendingPhaseRequirement(conj, false);
   }
 }
 
