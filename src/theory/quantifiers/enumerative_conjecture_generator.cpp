@@ -106,8 +106,10 @@ EnumerativeConjectureGenerator::EnumerativeConjectureGenerator(
     QuantifiersInferenceManager& qim,
     QuantifiersRegistry& qr,
     TermRegistry& tr)
-    : QuantifiersModule(env, qs, qim, qr, tr)
+    : QuantifiersModule(env, qs, qim, qr, tr), d_trustedEnvironment(qim, options(), env)
 {
+  // d_lemmaLogStream = std::cout;
+  d_hasUniqueGoal = true;
   d_nodeManager = nodeManager();
   d_rootType = d_nodeManager->mkSort("rootType");
   d_rootNonTerminal = NodeManager::mkBoundVar(d_rootType);
@@ -131,11 +133,14 @@ EnumerativeConjectureGenerator::EnumerativeConjectureGenerator(
   d_defaultOptions.write_quantifiers().quantSubCbqi = false;
 }
 
-EnumerativeConjectureGenerator::~EnumerativeConjectureGenerator() {}
+EnumerativeConjectureGenerator::~EnumerativeConjectureGenerator()
+{
+  // d_lemmaLogStream.close();
+}
 
 bool EnumerativeConjectureGenerator::needsCheck(Theory::Effort e)
 {
-  return d_qstate.getInstWhenNeedsCheck(e);
+  return d_hasUniqueGoal && d_qstate.getInstWhenNeedsCheck(e);
 }
 
 void EnumerativeConjectureGenerator::reset_round(Theory::Effort) {}
@@ -1051,15 +1056,15 @@ std::unordered_set<TNode> EnumerativeConjectureGenerator::getProvedConjectures(
     const Valuation& valuation,
     const quantifiers::TermRegistry& termReg)
 {
-  std::ostream& out = Trace("enumerative-conjecture-generator");
+  // std::ostream& out = d_lemmaLogStream;
 
-  out << "getProvedConjectures current conjectures:" << std::endl;
-  for (CIt<Set<TNode>> conjIter = conjectures.begin();
-       conjIter != conjectures.end();
-       ++conjIter)
-  {
-    out << "* " << *conjIter << std::endl;
-  }
+  // out << "getProvedConjectures current conjectures:" << std::endl;
+  // for (CIt<Set<TNode>> conjIter = conjectures.begin();
+  //      conjIter != conjectures.end();
+  //      ++conjIter)
+  // {
+  //   out << "* " << *conjIter << std::endl;
+  // }
 
   Set<TNode> result;
 
@@ -1075,8 +1080,7 @@ std::unordered_set<TNode> EnumerativeConjectureGenerator::getProvedConjectures(
         && valuation.isFixed(phi))
     {
       result.insert(phi);
-      // out << "getProvedConjectures: fixed sat literal " << phi << " is a
-      // conjecture" << std::endl;
+      // out << "getProvedConjectures: fixed sat literal " << phi << " is a conjecture" << std::endl;
     }
     else if (valuation.isSatLiteral(phi) && valuation.isFixed(phi))
     {
@@ -1085,8 +1089,7 @@ std::unordered_set<TNode> EnumerativeConjectureGenerator::getProvedConjectures(
     }
     else if (valuation.isSatLiteral(phi) && member(conjectures, TNode(phi)))
     {
-      // out << "getProvedConjectures: sat literal " << phi << " is not fixed,
-      // but is a conjecture" << std::endl;
+      // out << "getProvedConjectures: sat literal " << phi << " is not fixed, but is a conjecture" << std::endl;
     }
     else if (member(conjectures, TNode(phi)))
     {
@@ -1108,6 +1111,54 @@ std::unordered_set<TNode> EnumerativeConjectureGenerator::getProvedConjectures(
   return result;
 }
 
+/*
+If `maybeFactSet` doesn't have a value we return the tuple (maybeFactSet, false) as the result.
+
+
+*/
+std::tuple<std::optional<std::unordered_set<TNode>>, bool> EnumerativeConjectureGenerator::identifyAndRemoveGoal(std::optional<std::unordered_set<TNode>> maybeFactSet)
+{
+  typedef std::unordered_set<TNode> TNodeSet;
+  typedef std::optional<TNodeSet> MaybeSet;
+  typedef std::tuple<MaybeSet, bool> Result;
+
+  Result result = Result(MaybeSet(), false);
+
+  if (maybeFactSet.has_value())
+  {
+    TNodeSet& factSet = maybeFactSet.value();
+
+    TNodeSet goalSet;
+
+    std::copy_if(
+      factSet.begin(),
+      factSet.end(),
+      std::inserter(goalSet, goalSet.begin()),
+      [](TNode formula)
+      {
+        return formula.getKind() == Kind::NOT && formula[0].getKind() == Kind::FORALL;
+      });
+
+    TNodeSet assumptionSet;
+
+    std::copy_if(
+      factSet.begin(),
+      factSet.end(),
+      std::inserter(assumptionSet, assumptionSet.begin()),
+      [](TNode formula)
+      {
+        return !(formula.getKind() == Kind::NOT && formula[0].getKind() == Kind::FORALL);
+      });
+
+    if (goalSet.size() == 1)
+    {
+      result = Result(MaybeSet(assumptionSet), true);
+    }
+  }
+
+  return result;
+}
+
 void EnumerativeConjectureGenerator::check(CVC5_UNUSED Theory::Effort effort,
                                            QEffort qEffort)
 {
@@ -1122,6 +1173,29 @@ void EnumerativeConjectureGenerator::check(CVC5_UNUSED Theory::Effort effort,
   if (!d_initialFacts)
   {
     d_initialFacts = getInitialFacts(getState().d_preprocessedAssertions);
+
+    { // Begin identifying goal and initial trusted assertions.
+      typedef std::tuple<std::optional<std::unordered_set<TNode>>, bool> IdentifyAndRemoveResult;
+
+      const IdentifyAndRemoveResult identifyAndRemoveResult = identifyAndRemoveGoal(d_initialFacts);
+
+      const std::optional<std::unordered_set<TNode>>& initialTrustedAssertions = std::get<0>(identifyAndRemoveResult);
+
+      if (initialTrustedAssertions.has_value())
+      {
+        for (const TNode& trustedAssertion : initialTrustedAssertions.value())
+        {
+          d_trustedEnvironment.assertFormula(trustedAssertion);
+        }
+      }
+
+      d_hasUniqueGoal = std::get<1>(identifyAndRemoveResult);
+
+      if (!d_hasUniqueGoal)
+      {
+        std::cout << "Cannot identify a goal!" << std::endl;
+      }
+    } // End identifying goal and initial trusted assertions.
 
     if (d_subsolverEMatchFilter)
     {
@@ -1874,29 +1948,40 @@ bool EnumerativeConjectureGenerator::filterConjecture(
     result = INDUCTIVE;
   }
 
+  // debugPrintFilterConjecture(d_lemmaLogStream, conj, result);
+
   return (split || result == INDUCTIVE);
 }
 
 void EnumerativeConjectureGenerator::assertConjecture(
     quantifiers::QuantifiersInferenceManager& quantInfMgr,
-    TNode conj,
+    TNode conjecture,
     const bool split,
     const Vector<Node>& indEntBuf)
 {
   if (split)
   {
-    Node lem = NodeManager::mkNode(Kind::OR, conj.negate(), conj);
+    Node lem = NodeManager::mkNode(Kind::OR, conjecture.negate(), conjecture);
     Trace("enumerative-conjecture-generator")
         << "* asserting " << lem << std::endl;
     quantInfMgr.addPendingLemma(
         lem, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
-    quantInfMgr.addPendingPhaseRequirement(conj, false);
+    quantInfMgr.addPendingPhaseRequirement(conjecture, false);
   }
   else
   {
-    Assert(member(indEntBuf, Node(conj)));
-    quantInfMgr.addPendingLemma(
-        conj, InferenceId::QUANTIFIERS_ENUMERATIVE_CONJECTURE_GENERATOR);
+    Assert(member(indEntBuf, Node(conjecture)));
+
+    bool proved = d_trustedEnvironment.prove(conjecture);
+
+    if (proved)
+    {
+      std::cout << "Proved " << conjecture << " in trusted environment!" << std::endl;
+    }
+    else
+    {
+      std::cout << "Couldn't prove " << conjecture << " in trusted environment!" << std::endl;
+    }
   }
 }
 

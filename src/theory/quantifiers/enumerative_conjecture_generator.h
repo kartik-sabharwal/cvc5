@@ -10,6 +10,7 @@
 #include "theory/quantifiers/quant_module.h"
 #include "theory/quantifiers/sygus/sygus_enumerator.h"
 #include "theory/smt_engine_subsolver.h"
+#include "theory/quantifiers/trusted_environment.h"
 
 namespace cvc5::internal {
 namespace theory {
@@ -132,6 +133,18 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
 
  private:
   // Fields
+  /**
+   * A trusted environment object that *tries* to ensure we don't send bogus lemmas.
+   */
+  TrustedEnvironment d_trustedEnvironment;
+  /** 
+   * When we look at the initial facts and realize that the goal is ambiguous we set it to false.
+   * Before the check it's supposed to be true.
+   * After the check it may be either true or false.
+   */
+  bool d_hasUniqueGoal;
+  /** Any lemmas that this module sends to the main solver will also go here. */
+  // std::ofstream d_lemmaLogStream;
   /** The collection of relevant function symbols.  We rebuild this each time
       `check()` is called. */
   Vector<Node> d_relevantFunctionSymbols;
@@ -619,6 +632,8 @@ class EnumerativeConjectureGenerator : public QuantifiersModule
 
    Set<TNode> getProvedConjectures(const Set<TNode>& conjectures, const Valuation& valuation, const quantifiers::TermRegistry& termReg);
 
+   std::tuple<std::optional<std::unordered_set<TNode>>, bool> identifyAndRemoveGoal(std::optional<std::unordered_set<TNode>> maybeFactSet);
+   
    /**
     * Observe that there are two different member functions with the name
     * getInitialFacts.  The older function uses a valuation and a term registry
