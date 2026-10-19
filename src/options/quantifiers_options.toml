@@ -1943,7 +1943,7 @@ name   = "Quantifiers"
   category = "expert"
   long     = "enumerative-conjecture-generator-maximum-size=N"
   type     = "size_t"
-  default  = "0"
+  default  = "4"
   help     = "the size of the largest term that can appear on either side of a conjectured equality"
 
 [[option]]
@@ -1951,7 +1951,7 @@ name   = "Quantifiers"
   category = "expert"
   long     = "enumerative-conjecture-generator-maximum-difference=N"
   type     = "size_t"
-  default  = "0"
+  default  = "1"
   help     = "the maximum difference between the number of free variables on the left-hand and right-hand sides of an equality conjecture"
 
 [[option]]
@@ -1959,7 +1959,7 @@ name   = "Quantifiers"
   category = "expert"
   long     = "enumerative-conjecture-generator-period=N"
   type     = "size_t"
-  default  = "0"
+  default  = "10"
   help     = "how often we should generate conjectures"
 
 [[option]]
@@ -1967,7 +1967,7 @@ name   = "Quantifiers"
   category = "expert"
   long     = "prefer-const-representatives"
   type     = "bool"
-  default  = "false"
+  default  = "true"
   help     = "should we prefer 'const' representatives when searching for substitutions"
 
 [[option]]
@@ -1975,7 +1975,7 @@ name   = "Quantifiers"
   category = "expert"
   long     = "prefer-active-terms"
   type     = "bool"
-  default  = "false"
+  default  = "true"
   help     = "should we prefer 'active' members of equivalence classes when searching for substitutions"
 
 [[option]]
@@ -1991,7 +1991,7 @@ name   = "Quantifiers"
   category = "expert"
   long     = "ecg-vars-per-type=N"
   type     = "size_t"
-  default  = "4"
+  default  = "3"
   help     = "the number of free variables to use for each type when generating conjectures (default 4)"
 
 [[option]]
@@ -2015,7 +2015,7 @@ name   = "Quantifiers"
   category = "expert"
   long     = "ecg-split"
   type     = "bool"
-  default  = "true"
+  default  = "false"
   help     = "If true then conjectures will be sent as splitting lemmas: if C is a candidate conjecture we will send (C or not(C)) to the solver.  If false then given a conjecture C we will use a subsolver to check whether it is inductively entailed by the assertions at decision level zero.  In case C is inductively entailed then it is valid therefore we assert C directly.  Otherwise we skip over C."
 
 [[option]]
@@ -2023,7 +2023,7 @@ name   = "Quantifiers"
   category = "expert"
   long     = "ecg-subsolver-e-match-filter"
   type     = "bool"
-  default  = "true"
+  default  = "false"
   help     = "Instead of using the main solver for filtering conjectures based on e-matching use a subsolver."
 
 [[option]]
