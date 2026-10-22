@@ -1698,6 +1698,16 @@ void SetDefaults::setDefaultsQuantifiers(const LogicInfo& logic,
     SET_AND_NOTIFY_VAL_SYM(
         quantifiers, conjectureGen, conjNZero, "conjectureGenPerRound");
   }
+  if (opts.quantifiers.enumerativeConjectureGenerator)
+  {
+    SET_AND_NOTIFY(prop, satSolver, options::SatSolverMode::CADICAL, "enumerativeConjectureGenerator");
+    SET_AND_NOTIFY(datatypes, dtEagerSplitLastCall, true, "enumerativeConjectureGenerator");
+    SET_AND_NOTIFY(quantifiers, quantInduction, true, "enumerativeConjectureGenerator");
+    SET_AND_NOTIFY(quantifiers, dtStcInduction, true, "enumerativeConjectureGenerator");
+    SET_AND_NOTIFY(quantifiers, conflictBasedInst, true, "enumerativeConjectureGenerator");
+    SET_AND_NOTIFY(quantifiers, enumInst, true, "enumerativeConjectureGenerator");
+    SET_AND_NOTIFY(quantifiers, contextualEnumerator, true, "enumerativeConjectureGenerator");
+  }
   // can't pre-skolemize nested quantifiers without UF theory
   if (!logic.isTheoryEnabled(THEORY_UF)
       && opts.quantifiers.preSkolemQuant != options::PreSkolemQuantMode::OFF)
